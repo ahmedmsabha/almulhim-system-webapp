@@ -7,6 +7,7 @@ import { InstallPrompt } from '@/components/InstallPrompt'
 import { IOSInstallBanner } from '@/components/IOSInstallBanner'
 import { MacSafariInstallBanner } from '@/components/MacSafariInstallBanner'
 import { OfflineBanner } from '@/components/OfflineBanner'
+import { PwaReloadOnServiceWorkerUpdate } from '@/components/PwaReloadOnServiceWorkerUpdate'
 import './globals.css'
 
 const ibmPlexArabic = IBM_Plex_Sans_Arabic({
@@ -74,6 +75,7 @@ export default function RootLayout({
         <IOSInstallBanner />
         <MacSafariInstallBanner />
         <OfflineBanner />
+        <PwaReloadOnServiceWorkerUpdate />
         {children}
         <Toaster 
           position="top-center" 

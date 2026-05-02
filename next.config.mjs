@@ -20,6 +20,46 @@ const withPWA = withPWAInit({
   extendDefaultRuntimeCaching: true,
   workboxOptions: {
     runtimeCaching: [
+      /**
+       * لوحة المعلم: لا تخزين في SW — بعد كل نشر تتبدّل معرّفات Server Actions؛ الكاش القديم يُظهر
+       * الخطأ "Server Action was not found". الطالب يبقى مع StaleWhileRevalidate أدناه.
+       */
+      {
+        urlPattern: ({ request, url: { pathname }, sameOrigin }) =>
+          request.headers.get('RSC') === '1' &&
+          request.headers.get('Next-Router-Prefetch') === '1' &&
+          sameOrigin &&
+          pathname.startsWith('/admin'),
+        handler: 'NetworkOnly',
+        method: 'GET',
+      },
+      {
+        urlPattern: ({ request, url: { pathname }, sameOrigin }) =>
+          request.headers.get('RSC') === '1' && sameOrigin && pathname.startsWith('/admin'),
+        handler: 'NetworkOnly',
+        method: 'GET',
+      },
+      {
+        urlPattern: ({ url: { pathname }, sameOrigin }) =>
+          sameOrigin && pathname.startsWith('/admin'),
+        handler: 'NetworkOnly',
+        method: 'GET',
+      },
+      /**
+       * إن بقي CacheFirst لحزم JS فإن Server Actions القديمة تبقى بعد النشر فيُرفض المعرّف على الخادم.
+       * NetworkFirst يجلب آخر البناء عند توفر الشبكة، مع احتياط من الكاش عند الانقطاع.
+       */
+      {
+        urlPattern: /\/_next\/static\/.+\.js$/i,
+        handler: 'NetworkFirst',
+        method: 'GET',
+        options: {
+          cacheName: 'next-static-js-assets',
+          networkTimeoutSeconds: 5,
+          expiration: { maxEntries: 80, maxAgeSeconds: 60 * 60 * 24 * 7 },
+          cacheableResponse: { statuses: [200] },
+        },
+      },
       {
         urlPattern: /supabase\.co/i,
         handler: 'NetworkOnly',
