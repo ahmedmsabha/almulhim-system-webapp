@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useTransition } from 'react'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import {
@@ -29,7 +30,7 @@ import {
   ChevronLeft,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { signOutAction } from '@/actions/auth'
+import { signOutAndClearAppCaches } from '@/lib/client/sign-out-client'
 import type { Profile, Subscription, StudentSubscriptionUiStatus } from '@/types'
 
 const navItems = [
@@ -41,13 +42,21 @@ const navItems = [
 ]
 
 function LogoutSubmitButton({ className }: { className?: string }) {
+  const [pending, startTransition] = useTransition()
   return (
-    <form action={signOutAction}>
-      <button type="submit" className={className}>
-        <LogOut className="size-5 shrink-0" />
-        <span>تسجيل الخروج</span>
-      </button>
-    </form>
+    <button
+      type="button"
+      disabled={pending}
+      className={className}
+      onClick={() => {
+        startTransition(async () => {
+          await signOutAndClearAppCaches()
+        })
+      }}
+    >
+      <LogOut className="size-5 shrink-0" />
+      <span>تسجيل الخروج</span>
+    </button>
   )
 }
 
@@ -229,15 +238,14 @@ export function StudentAppShell({
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem asChild className="cursor-pointer p-0 focus:bg-destructive/10">
-                    <form action={signOutAction} className="w-full">
-                      <button
-                        type="submit"
-                        className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-destructive"
-                      >
-                        <LogOut className="size-4" />
-                        تسجيل الخروج
-                      </button>
-                    </form>
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-destructive"
+                      onClick={() => void signOutAndClearAppCaches()}
+                    >
+                      <LogOut className="size-4" />
+                      تسجيل الخروج
+                    </button>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

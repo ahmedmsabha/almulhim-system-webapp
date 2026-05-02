@@ -15,6 +15,8 @@ const withPWA = withPWAInit({
   disable: process.env.NODE_ENV === 'development',
   /** يخزّن موارد التنقّل عبر next/link ويسرّع الزيارة الثانية */
   cacheOnFrontEndNav: true,
+  /** يخزّن المزيد من السكربتات/الأنماط عند التنقّل — يزيد الكاش لضعف الشبكة (وزن تنزيل أعلى قليلاً) */
+  aggressiveFrontEndNavCaching: true,
   extendDefaultRuntimeCaching: true,
   workboxOptions: {
     runtimeCaching: [
@@ -23,14 +25,19 @@ const withPWA = withPWAInit({
         handler: 'NetworkOnly',
         method: 'GET',
       },
+      /** GET للـ API: عرض من الكاش فوراً ثم تحديث في الخلفية (مناسب لمسارات مثل PDF). لا يُخزّن إلا رد 200. */
       {
         urlPattern: ({ sameOrigin, url: { pathname } }) =>
           !(!sameOrigin || pathname.startsWith('/api/auth/callback')) &&
           pathname.startsWith('/api/'),
-        handler: 'NetworkOnly',
+        handler: 'StaleWhileRevalidate',
         method: 'GET',
         options: {
           cacheName: 'apis',
+          expiration: { maxEntries: 64, maxAgeSeconds: 60 * 60 * 24 * 14 },
+          cacheableResponse: {
+            statuses: [200],
+          },
         },
       },
       {
@@ -43,7 +50,7 @@ const withPWA = withPWAInit({
         method: 'GET',
         options: {
           cacheName: 'pages-rsc-prefetch',
-          expiration: { maxEntries: 80, maxAgeSeconds: 60 * 60 * 24 * 7 },
+          expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 * 14 },
         },
       },
       {
@@ -53,7 +60,7 @@ const withPWA = withPWAInit({
         method: 'GET',
         options: {
           cacheName: 'pages-rsc',
-          expiration: { maxEntries: 80, maxAgeSeconds: 60 * 60 * 24 * 7 },
+          expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 * 14 },
         },
       },
       {
@@ -63,7 +70,7 @@ const withPWA = withPWAInit({
         method: 'GET',
         options: {
           cacheName: 'pages',
-          expiration: { maxEntries: 96, maxAgeSeconds: 60 * 60 * 24 * 7 },
+          expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 * 14 },
         },
       },
     ],

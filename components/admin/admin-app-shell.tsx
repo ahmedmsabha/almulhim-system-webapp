@@ -20,7 +20,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { ConnectionStatus } from "@/components/shared/layout/connection-status"
-import { signOutAction } from "@/actions/auth"
+import { signOutAndClearAppCaches } from "@/lib/client/sign-out-client"
 import type { Profile } from "@/types"
 
 const adminNavItems = [
@@ -116,16 +116,15 @@ export function AdminAppShell({
 
           <div className="p-4 border-t border-border space-y-3">
             <ConnectionStatus />
-            <form action={signOutAction}>
-              <Button
-                type="submit"
-                variant="ghost"
-                className="w-full justify-start gap-3 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-              >
-                <LogOut className="h-5 w-5" />
-                <span>تسجيل الخروج</span>
-              </Button>
-            </form>
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full justify-start gap-3 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+              onClick={() => void signOutAndClearAppCaches()}
+            >
+              <LogOut className="h-5 w-5" />
+              <span>تسجيل الخروج</span>
+            </Button>
           </div>
         </div>
       </aside>

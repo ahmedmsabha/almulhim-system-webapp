@@ -1,7 +1,6 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useRouter } from "next/navigation"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -66,7 +65,6 @@ export function AdminMaterialsClient({
   initialMaterials: PDFMaterial[]
   autoOpenCreate?: boolean
 }) {
-  const router = useRouter()
   const [materials, setMaterials] = useState(initialMaterials)
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedCategory, setSelectedCategory] = useState<string>("all")
@@ -123,8 +121,11 @@ export function AdminMaterialsClient({
 
   const refreshFromServer = async () => {
     const res = await adminListPdfs()
-    if (res.success) setMaterials(res.data)
-    router.refresh()
+    if (res.success) {
+      setMaterials(res.data)
+      return
+    }
+    toast.error(res.error)
   }
 
   const filteredMaterials = materials.filter((material) => {

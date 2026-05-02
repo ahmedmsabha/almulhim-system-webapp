@@ -17,7 +17,7 @@ import {
   AlertCircle,
   LogOut,
 } from 'lucide-react'
-import { signOutAction } from '@/actions/auth'
+import { signOutAndClearAppCaches } from '@/lib/client/sign-out-client'
 import type { Profile, StudentSubscriptionUiStatus, Subscription } from '@/types'
 
 function formatDate(dateString: string): string {
@@ -215,17 +215,16 @@ export function StudentProfileView({
       <Separator className="my-10" />
 
       <div className="flex justify-center">
-        <form action={signOutAction} className="w-full max-w-md">
-          <Button
-            variant="destructive"
-            size="lg"
-            className="min-h-11 w-full shadow-sm gap-2"
-            type="submit"
-          >
-            <LogOut className="size-5 shrink-0" />
-            تسجيل الخروج
-          </Button>
-        </form>
+        <Button
+          variant="destructive"
+          size="lg"
+          className="min-h-11 w-full max-w-md shadow-sm gap-2"
+          type="button"
+          onClick={() => void signOutAndClearAppCaches()}
+        >
+          <LogOut className="size-5 shrink-0" />
+          تسجيل الخروج
+        </Button>
       </div>
     </div>
   )
