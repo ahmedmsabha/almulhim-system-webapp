@@ -5,6 +5,14 @@ import { useRouter } from "next/navigation"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Search,
   UserPlus,
@@ -15,6 +23,7 @@ import {
   Crown,
   Edit,
   Smartphone,
+  CalendarClock,
 } from "lucide-react"
 import {
   DropdownMenu,
@@ -30,24 +39,58 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
-import type { DemoStudent } from "@/types"
+import type { DemoStudent, SubscriptionPlan } from "@/types"
 import { adminResetStudentDeviceBinding } from "@/actions/admin-device-binding"
+import {
+  deactivateStudentSubscriptionAdmin,
+  saveStudentSubscriptionAdmin,
+} from "@/actions/students"
+import { Spinner } from "@/components/ui/spinner"
+
+function addDaysToIsoDate(dateStr: string, days: number): string {
+  const d = new Date(`${dateStr}T12:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
 
 export function AdminStudentsClient({
   initialStudents,
+  subscriptionPlans,
 }: {
   initialStudents: DemoStudent[]
+  subscriptionPlans: SubscriptionPlan[]
 }) {
   const router = useRouter()
   const [students, setStudents] = useState<DemoStudent[]>(initialStudents)
   const [searchQuery, setSearchQuery] = useState("")
   const [filterType, setFilterType] = useState<"all" | "active" | "inactive" | "premium">("all")
   const [selectedStudent, setSelectedStudent] = useState<DemoStudent | null>(null)
+  const [subscriptionStudent, setSubscriptionStudent] = useState<DemoStudent | null>(null)
+  const [subPlanId, setSubPlanId] = useState("")
+  const [subStart, setSubStart] = useState("")
+  const [subEnd, setSubEnd] = useState("")
+  const [subSaving, setSubSaving] = useState(false)
   const [showAddDialog, setShowAddDialog] = useState(false)
 
   useEffect(() => {
     setStudents(initialStudents)
   }, [initialStudents])
+
+  useEffect(() => {
+    if (!subscriptionStudent || subscriptionPlans.length === 0) return
+    const firstPlan = subscriptionPlans[0]
+    const pid = subscriptionStudent.subscriptionPlanId ?? firstPlan.id
+    const plan = subscriptionPlans.find((p) => p.id === pid) ?? firstPlan
+    const start =
+      subscriptionStudent.subscriptionStartDate?.slice(0, 10) ??
+      new Date().toISOString().slice(0, 10)
+    const end =
+      subscriptionStudent.subscriptionEndDate?.slice(0, 10) ??
+      addDaysToIsoDate(start, plan.duration_days)
+    setSubPlanId(pid)
+    setSubStart(start)
+    setSubEnd(end)
+  }, [subscriptionStudent, subscriptionPlans])
 
   const filteredStudents = students.filter((student) => {
     const matchesSearch =
@@ -62,6 +105,60 @@ export function AdminStudentsClient({
 
     return matchesSearch && matchesFilter
   })
+
+  async function handleSaveSubscription() {
+    if (!subscriptionStudent) return
+    setSubSaving(true)
+    try {
+      const res = await saveStudentSubscriptionAdmin({
+        studentId: subscriptionStudent.id,
+        subscriptionRecordId: subscriptionStudent.subscriptionRecordId ?? null,
+        planId: subPlanId,
+        startDateIso: subStart,
+        endDateIso: subEnd,
+      })
+      if (!res.success) {
+        toast.error(res.error)
+        return
+      }
+      toast.success(
+        subscriptionStudent.subscriptionRecordId ?
+          "تم حفظ تعديلات الاشتراك"
+        : "تم تفعيل الاشتراك",
+      )
+      setSubscriptionStudent(null)
+      router.refresh()
+    } finally {
+      setSubSaving(false)
+    }
+  }
+
+  async function handleDeactivateSubscription() {
+    if (!subscriptionStudent?.subscriptionRecordId) return
+    if (
+      !window.confirm(
+        "إلغاء اشتراك هذا الطالب؟ سيُوقَف وصوله للمحتوى حتى تعيد التفعيل.",
+      )
+    ) {
+      return
+    }
+    setSubSaving(true)
+    try {
+      const res = await deactivateStudentSubscriptionAdmin({
+        studentId: subscriptionStudent.id,
+        subscriptionRecordId: subscriptionStudent.subscriptionRecordId,
+      })
+      if (!res.success) {
+        toast.error(res.error)
+        return
+      }
+      toast.success("تم إلغاء الاشتراك")
+      setSubscriptionStudent(null)
+      router.refresh()
+    } finally {
+      setSubSaving(false)
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -164,6 +261,12 @@ export function AdminStudentsClient({
                             عرض التفاصيل
                           </DropdownMenuItem>
                           <DropdownMenuItem
+                            onClick={() => setSubscriptionStudent(student)}
+                          >
+                            <CalendarClock className="ml-2 h-4 w-4" />
+                            تعديل الاشتراك
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
                             onClick={async () => {
                               if (
                                 !window.confirm(
@@ -212,14 +315,18 @@ export function AdminStudentsClient({
                           ? "bg-chart-4/10 text-chart-4"
                           : student.subscriptionType === "monthly"
                             ? "bg-primary/10 text-primary"
-                            : "bg-muted text-muted-foreground"
+                            : student.subscriptionType === "term"
+                              ? "bg-accent/15 text-accent-foreground"
+                              : "bg-muted text-muted-foreground"
                       }`}
                     >
                       {student.subscriptionType === "premium"
                         ? "اشتراك مميز"
                         : student.subscriptionType === "monthly"
                           ? "اشتراك شهري"
-                          : "مجاني"}
+                          : student.subscriptionType === "term"
+                            ? "اشتراك فصلي"
+                            : "بانتظار التفعيل"}
                     </span>
                   </div>
                 </div>
@@ -240,7 +347,12 @@ export function AdminStudentsClient({
         )}
       </div>
 
-      <Dialog open={!!selectedStudent} onOpenChange={() => setSelectedStudent(null)}>
+      <Dialog
+        open={!!selectedStudent}
+        onOpenChange={(open) => {
+          if (!open) setSelectedStudent(null)
+        }}
+      >
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>تفاصيل الطالب</DialogTitle>
@@ -271,7 +383,9 @@ export function AdminStudentsClient({
                       ? "مميز"
                       : selectedStudent.subscriptionType === "monthly"
                         ? "شهري"
-                        : "مجاني"}
+                        : selectedStudent.subscriptionType === "term"
+                          ? "فصل دراسي"
+                          : "لم يُفعَّل بعد"}
                   </span>
                 </div>
                 <div className="flex justify-between border-b border-border py-2">
@@ -297,10 +411,156 @@ export function AdminStudentsClient({
               </div>
             </div>
           )}
-          <DialogFooter className="gap-2">
+          <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-between">
+            <Button
+              type="button"
+              variant="secondary"
+              className="w-full sm:w-auto"
+              onClick={() => {
+                setSubscriptionStudent(selectedStudent)
+                setSelectedStudent(null)
+              }}
+            >
+              <CalendarClock className="ms-2 h-4 w-4" />
+              تعديل الاشتراك
+            </Button>
             <Button type="button" variant="outline" onClick={() => setSelectedStudent(null)}>
               إغلاق
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!subscriptionStudent}
+        onOpenChange={(open) => {
+          if (!open) setSubscriptionStudent(null)
+        }}
+      >
+        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>تعديل اشتراك الطالب</DialogTitle>
+          </DialogHeader>
+          {subscriptionStudent ?
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                {subscriptionStudent.subscriptionRecordId ?
+                  "تحديث الخطة أو تواريخ البدء والانتهاء. يُعاد تفعيل الحالة إلى «نشط» بعد الحفظ."
+                : "لا يوجد سجل اشتراك بعد — سيتم إنشاء اشتراك جديد لهذا الطالب."}
+              </p>
+              {subscriptionPlans.length === 0 ?
+                <p className="rounded-lg border border-dashed bg-muted/40 px-3 py-3 text-sm text-muted-foreground">
+                  لا توجد خطط اشتراك مفعّلة في قاعدة البيانات. أضف صفوفاً في جدول{" "}
+                  <span dir="ltr" className="font-mono text-xs">
+                    subscription_plans
+                  </span>{" "}
+                  ثم أعد تحميل الصفحة.
+                </p>
+              : (
+                <>
+                  <div className="space-y-2">
+                    <Label>خطة الاشتراك</Label>
+                    <Select
+                      dir="rtl"
+                      value={subPlanId}
+                      onValueChange={setSubPlanId}
+                      disabled={subSaving}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="اختر الخطة" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {subscriptionPlans.map((p) => (
+                          <SelectItem key={p.id} value={p.id}>
+                            {p.name} · {p.duration_days} يومًا · {p.price} ₪
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="sub-start">تاريخ البدء</Label>
+                      <Input
+                        id="sub-start"
+                        type="date"
+                        value={subStart}
+                        onChange={(e) => setSubStart(e.target.value)}
+                        disabled={subSaving}
+                        dir="ltr"
+                        className="font-mono"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="sub-end">تاريخ الانتهاء</Label>
+                      <Input
+                        id="sub-end"
+                        type="date"
+                        value={subEnd}
+                        onChange={(e) => setSubEnd(e.target.value)}
+                        disabled={subSaving}
+                        dir="ltr"
+                        className="font-mono"
+                      />
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    disabled={subSaving || !subPlanId || !subStart}
+                    onClick={() => {
+                      const plan = subscriptionPlans.find((p) => p.id === subPlanId)
+                      if (!plan) return
+                      setSubEnd(addDaysToIsoDate(subStart, plan.duration_days))
+                    }}
+                  >
+                    تعبئة تاريخ الانتهاء من مدة الخطة
+                  </Button>
+                </>
+              )}
+            </div>
+          : null}
+          <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+            <div className="flex flex-col gap-2 sm:flex-row">
+              {subscriptionStudent?.subscriptionRecordId ?
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={subSaving || subscriptionPlans.length === 0}
+                  onClick={() => void handleDeactivateSubscription()}
+                >
+                  إلغاء الاشتراك
+                </Button>
+              : null}
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={subSaving}
+                onClick={() => setSubscriptionStudent(null)}
+              >
+                إغلاق
+              </Button>
+              <Button
+                type="button"
+                disabled={
+                  subSaving || subscriptionPlans.length === 0 || !subPlanId || !subStart || !subEnd
+                }
+                onClick={() => void handleSaveSubscription()}
+              >
+                {subSaving ?
+                  <>
+                    <Spinner className="ms-2 h-4 w-4" />
+                    جاري الحفظ…
+                  </>
+                : subscriptionStudent?.subscriptionRecordId ?
+                  "حفظ التعديلات"
+                : "تفعيل الاشتراك"}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

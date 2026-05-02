@@ -39,9 +39,19 @@ function computeState(): OfflineStatusState {
   }
 }
 
+/**
+ * Stable snapshot for SSR + first client paint only — avoids hydration mismatches:
+ * some runtimes expose `navigator.onLine === false` during SSR while the browser reports online.
+ */
+const HYDRATION_SAFE_STATE: OfflineStatusState = {
+  isOnline: true,
+  isWeak: false,
+  connectionType: null,
+}
+
 /** Maps navigator.onLine + Network Information API to connection buckets. */
 export function useOfflineStatus(): OfflineStatusState {
-  const [state, setState] = useState<OfflineStatusState>(computeState)
+  const [state, setState] = useState<OfflineStatusState>(() => HYDRATION_SAFE_STATE)
 
   const update = useCallback(() => {
     setState(computeState())

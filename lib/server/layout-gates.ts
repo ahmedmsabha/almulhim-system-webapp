@@ -55,6 +55,15 @@ export async function requireStudentLayoutContext(): Promise<StudentLayoutContex
   return { profile, subscription, subscriptionStatus }
 }
 
+/** صفحات الدروس والملفات وغيرها — يقتصر الوصول على اشتراك فعّال (يشمل «ينتهي قريباً»). */
+export async function requireStudentContentAccess(): Promise<StudentLayoutContext> {
+  const ctx = await requireStudentLayoutContext()
+  if (ctx.subscriptionStatus !== "active") {
+    redirect("/student")
+  }
+  return ctx
+}
+
 export async function requireAdminLayoutContext(): Promise<{ profile: Profile }> {
   const supabase = await createClient()
   const {

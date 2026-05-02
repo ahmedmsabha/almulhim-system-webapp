@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -40,14 +40,50 @@ import {
   adminRemoveVideo,
   adminUpdateVideo,
 } from "@/actions/admin-lessons"
+import {
+  adminFinalizeLessonHlsFromUpload,
+  adminPresignHlsPartUploads,
+} from "@/actions/admin-media-hls"
+import { AdminUploadOverlay } from "@/components/admin/admin-upload-overlay"
+import { collectFilesWithRelativePathsFromDrop } from "@/lib/client/collect-files-from-data-transfer"
+import { xhrPutBlob } from "@/lib/client/admin-upload-xhr"
 import type { VideoLesson } from "@/types"
+
+function normalizeRelativePath(raw: string): string {
+  return raw.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+/g, "/").trim()
+}
+
+function guessContentType(path: string): string {
+  const lower = path.toLowerCase()
+  if (lower.endsWith(".m3u8")) return "application/vnd.apple.mpegurl"
+  if (lower.endsWith(".ts")) return "video/mp2t"
+  if (lower.endsWith(".mp4")) return "video/mp4"
+  if (lower.endsWith(".vtt")) return "text/vtt"
+  return "application/octet-stream"
+}
+
+async function mapPool<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>) {
+  let cursor = 0
+  const workers = Array.from(
+    { length: Math.min(concurrency, Math.max(1, items.length)) },
+    async () => {
+      while (cursor < items.length) {
+        const i = cursor++
+        await worker(items[i])
+      }
+    }
+  )
+  await Promise.all(workers)
+}
 
 export function AdminLessonsClient({
   initialLessons,
   autoOpenCreate = false,
+  enableR2FolderUpload = false,
 }: {
   initialLessons: VideoLesson[]
   autoOpenCreate?: boolean
+  enableR2FolderUpload?: boolean
 }) {
   const router = useRouter()
   const [lessons, setLessons] = useState(initialLessons)
@@ -63,6 +99,14 @@ export function AdminLessonsClient({
   const [formDurationMin, setFormDurationMin] = useState("30")
   const [formPreview, setFormPreview] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [hlsUploadOverlay, setHlsUploadOverlay] = useState<{
+    pct: number
+    title: string
+    subtitle?: string
+  } | null>(null)
+  const hlsBusy = hlsUploadOverlay !== null
+  const hlsFolderInputRef = useRef<HTMLInputElement>(null)
+  const [hlsDragOver, setHlsDragOver] = useState(false)
 
   useEffect(() => {
     setLessons(initialLessons)
@@ -143,9 +187,137 @@ export function AdminLessonsClient({
     await refreshFromServer()
   }
 
+  const runHlsFolderUpload = async (list: File[]) => {
+    const lessonId = editingLesson?.id
+    if (!lessonId) return
+
+    const files = Array.from(list).filter(
+      (f) => !normalizeRelativePath(f.webkitRelativePath || f.name).includes("..")
+    )
+    if (!files.length) {
+      toast.error("لا توجد ملفات صالحة")
+      return
+    }
+
+    const normalized = files.map((file) => ({
+      file,
+      rel: normalizeRelativePath(file.webkitRelativePath || file.name),
+    }))
+    const master = normalized.find(({ rel }) => rel.endsWith("master.m3u8"))
+    if (!master) {
+      toast.error("يجب أن يحتوي المجلد على ملف master.m3u8")
+      return
+    }
+
+    const BATCH = 80
+    const totalBytes = normalized.reduce((s, x) => s + x.file.size, 0) || 1
+    const loadedByRel = new Map<string, number>()
+
+    const bumpProgress = () => {
+      let sum = 0
+      for (const x of normalized) {
+        sum += Math.min(x.file.size, loadedByRel.get(x.rel) ?? 0)
+      }
+      const ratio = sum / totalBytes
+      const pct = Math.min(92, Math.round(ratio * 92))
+      setHlsUploadOverlay({
+        pct,
+        title: "رفع ملفات الفيديو إلى السحابة",
+        subtitle: `${Math.round(ratio * 100)}% من الحجم الإجمالي (${normalized.length} ملفاً)`,
+      })
+    }
+
+    setHlsUploadOverlay({
+      pct: 4,
+      title: "جاري التجهيز",
+      subtitle: "طلب روابط الرفع الآمنة من الخادم…",
+    })
+
+    try {
+      for (let i = 0; i < normalized.length; i += BATCH) {
+        const slice = normalized.slice(i, i + BATCH)
+        const payload = slice.map(({ rel, file }) => ({
+          relativePath: rel,
+          contentType: guessContentType(file.name),
+        }))
+        const presign = await adminPresignHlsPartUploads(lessonId, payload)
+        if (!presign.success) {
+          toast.error(presign.error)
+          return
+        }
+        const signedMap = new Map(presign.data.map((x) => [x.relativePath, x.signedUrl]))
+
+        await mapPool(slice, 6, async ({ file, rel }) => {
+          const url = signedMap.get(rel)
+          if (!url) throw new Error("تعذّر الحصول على رابط الرفع")
+          const ct = guessContentType(file.name)
+          await xhrPutBlob(url, file, ct, (loaded) => {
+            loadedByRel.set(rel, loaded)
+            bumpProgress()
+          })
+          loadedByRel.set(rel, file.size)
+          bumpProgress()
+        })
+      }
+
+      setHlsUploadOverlay({
+        pct: 94,
+        title: "إنهاء الإعداد",
+        subtitle: "ربط قائمة التشغيل بالدرس في قاعدة البيانات…",
+      })
+
+      const fin = await adminFinalizeLessonHlsFromUpload(lessonId, master.rel)
+      if (!fin.success) {
+        toast.error(fin.error)
+        return
+      }
+
+      setHlsUploadOverlay({
+        pct: 100,
+        title: "اكتمل الرفع",
+        subtitle: "تم ضبط رابط الدرس",
+      })
+      await new Promise((r) => setTimeout(r, 420))
+
+      toast.success("تم رفع المجلد وربط قائمة التشغيل بالدرس")
+      setFormHlsUrl(fin.data?.hls_url ?? "")
+      await refreshFromServer()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "فشل رفع المجلد")
+    } finally {
+      setHlsUploadOverlay(null)
+    }
+  }
+
+  const handleHlsFolderPick = async (e: ChangeEvent<HTMLInputElement>) => {
+    const list = e.target.files
+    e.target.value = ""
+    if (!list?.length) return
+    if (!editingLesson?.id) {
+      toast.error("احفظ الدرس أولاً ليُنشأ معرّف ثابت")
+      return
+    }
+    await runHlsFolderUpload(Array.from(list))
+  }
+
+  const handleHlsDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setHlsDragOver(false)
+    if (!editingLesson?.id || hlsBusy || saving || formPreview) return
+    const collected = await collectFilesWithRelativePathsFromDrop(e.dataTransfer)
+    if (!collected.length) {
+      toast.error("أسقط مجلداً أو ملفات HLS صالحة")
+      return
+    }
+    await runHlsFolderUpload(collected)
+  }
+
   const saveDialog = async () => {
     const dm = parseInt(formDurationMin, 10)
     const durationSec = Number.isFinite(dm) ? dm * 60 : 0
+    const keepOpen = enableR2FolderUpload && !formPreview
+
     setSaving(true)
     try {
       if (editingLesson) {
@@ -178,11 +350,20 @@ export function AdminLessonsClient({
           toast.error(res.error)
           return
         }
-        toast.success("تمت إضافة الدرس")
+        toast.success(
+          keepOpen ? "تمت إضافة الدرس — يمكنك رفع مجلد HLS من الأسفل دون إغلاق النافذة" : "تمت إضافة الدرس"
+        )
+        if (keepOpen) {
+          setEditingLesson(res.data)
+        }
       }
-      setShowAddDialog(false)
-      setEditingLesson(null)
+
       await refreshFromServer()
+
+      if (!keepOpen) {
+        setShowAddDialog(false)
+        setEditingLesson(null)
+      }
     } finally {
       setSaving(false)
     }
@@ -347,7 +528,7 @@ export function AdminLessonsClient({
           }
         }}
       >
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg overflow-y-auto max-h-[90vh]">
           <DialogHeader>
             <DialogTitle>{editingLesson ? "تعديل الدرس" : "إضافة درس جديد"}</DialogTitle>
           </DialogHeader>
@@ -376,14 +557,66 @@ export function AdminLessonsClient({
                 رابط HLS (master.m3u8 على R2)
               </label>
               <Input
-                placeholder="https://…/videos/{lesson}/master.m3u8"
+                placeholder="https://…/hls/{lesson}/…/master.m3u8"
                 dir="ltr"
                 value={formHlsUrl}
                 onChange={(e) => setFormHlsUrl(e.target.value)}
               />
-              <p className="text-xs text-muted-foreground">
-                للدروس الكاملة: رابط قائمة الفيديو الرئيسية على Cloudflare R2.
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                للدروس الكاملة: إما لصق الرابط العام لـ master.m3u8، أو رفع مجلد HLS كاملاً من المتصفح عندما يكون R2 مهيّأً.
               </p>
+              {enableR2FolderUpload && editingLesson && !formPreview ?
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(ke) =>
+                    ke.key === "Enter" && !hlsBusy && hlsFolderInputRef.current?.click()
+                  }
+                  onDragEnter={(ev) => {
+                    ev.preventDefault()
+                    setHlsDragOver(true)
+                  }}
+                  onDragLeave={() => setHlsDragOver(false)}
+                  onDragOver={(ev) => {
+                    ev.preventDefault()
+                    ev.stopPropagation()
+                    setHlsDragOver(true)
+                  }}
+                  onDrop={(ev) => void handleHlsDrop(ev)}
+                  className={`rounded-lg border border-dashed p-3 space-y-2 bg-muted/30 transition-colors ${
+                    hlsDragOver ? "border-primary bg-primary/5" : "border-border"
+                  }`}
+                >
+                  <input
+                    ref={hlsFolderInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    {...({ webkitdirectory: "" } as Record<string, string>)}
+                    onChange={(ev) => void handleHlsFolderPick(ev)}
+                  />
+                  <p className="text-sm font-medium text-foreground">رفع ملفات الفيديو (HLS)</p>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    اسحب مجلد الترميز هنا أو اختره — يجب أن يتضمّن <code className="rounded bg-muted px-1">master.m3u8</code> والجزئيات.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={hlsBusy || saving}
+                    onClick={() => hlsFolderInputRef.current?.click()}
+                  >
+                    {hlsBusy ? "جاري الرفع…" : "اختيار مجلد HLS"}
+                  </Button>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    على R2 يجب السماح بطلبات PUT من أصل موقعك في إعدادات CORS.
+                  </p>
+                </div>
+              : enableR2FolderUpload && !editingLesson && !formPreview ?
+                <p className="text-xs text-muted-foreground">
+                  احفظ الدرس أولاً ليُنشأ معرّف ثابت ثم ارجع لهذا الحوار أو أبقِ النافذة مفتوحة بعد الحفظ لرفع المجلد.
+                </p>
+              : null}
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground block">
@@ -442,6 +675,7 @@ export function AdminLessonsClient({
             <Button
               type="button"
               variant="outline"
+              disabled={hlsBusy}
               onClick={() => {
                 setShowAddDialog(false)
                 setEditingLesson(null)
@@ -449,12 +683,23 @@ export function AdminLessonsClient({
             >
               إلغاء
             </Button>
-            <Button type="button" disabled={saving || !formTitle.trim()} onClick={() => void saveDialog()}>
+            <Button
+              type="button"
+              disabled={saving || hlsBusy || !formTitle.trim()}
+              onClick={() => void saveDialog()}
+            >
               {editingLesson ? "حفظ" : "إضافة"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AdminUploadOverlay
+        open={hlsUploadOverlay !== null}
+        percent={hlsUploadOverlay?.pct ?? 0}
+        title={hlsUploadOverlay?.title ?? ""}
+        subtitle={hlsUploadOverlay?.subtitle}
+      />
     </div>
   )
 }

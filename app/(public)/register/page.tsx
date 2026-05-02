@@ -21,7 +21,9 @@ export default function RegisterPage() {
             <span className="text-xs text-muted-foreground">{BRAND.teacherAr}</span>
           </Link>
           <h1 className="mb-2 text-2xl font-bold">إنشاء حساب</h1>
-          <p className="text-muted-foreground">سجّل كطالب — يفعّل المعلِّم اشتراكك لاحقاً</p>
+          <p className="text-muted-foreground">
+            إنشاء حساب مجاني كطالب. الاشتراك المدفوع أو التفعيل الكامل يكون لاحقاً بعد موافقة المعلِّم.
+          </p>
         </div>
 
         <RegisterForm />

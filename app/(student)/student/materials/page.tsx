@@ -4,8 +4,10 @@ import { MaterialsContent } from './materials-content'
 import { createClient } from '@/lib/supabase/server'
 import { getSubscriberPdfs } from '@/lib/db/queries/pdfs'
 import { materialsWithPlaceholderStatus } from '@/lib/server/student-home-data'
+import { requireStudentContentAccess } from '@/lib/server/layout-gates'
 
 export default async function MaterialsPage() {
+  await requireStudentContentAccess()
   const supabase = await createClient()
   const {
     data: { session },

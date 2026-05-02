@@ -6,6 +6,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { DownloadButton, DownloadBadge } from '@/components/shared/media/download-button'
 import { cn } from '@/lib/utils'
+import { useStudentPdfOffline } from '@/lib/client/use-student-pdf-offline'
 import type { MaterialWithStatus, PDFMaterial } from '@/types'
 
 interface PDFCardProps {
@@ -35,10 +36,10 @@ export function PDFCard({
   showDownload = true,
   className,
 }: PDFCardProps) {
-  const handleDownload = async () => {
-    console.log('Downloading material:', material.id)
-    await new Promise((resolve) => setTimeout(resolve, 2000))
-  }
+  const { displayStatus, download, remove } = useStudentPdfOffline(
+    material.id,
+    material.download_status ?? 'not_downloaded'
+  )
 
   const iconRing = categoryIconWrap[material.category] ?? 'bg-muted text-muted-foreground'
 
@@ -66,7 +67,7 @@ export function PDFCard({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2 self-end sm:self-center">
-          {material.download_status && <DownloadBadge status={material.download_status} />}
+          {displayStatus !== 'not_downloaded' && <DownloadBadge status={displayStatus} />}
           <Button asChild size="sm" variant="outline" className="min-h-11 gap-2 sm:min-h-9">
             <Link href={`/student/materials/${material.id}`}>
               <ExternalLink className="size-4" />
@@ -75,8 +76,9 @@ export function PDFCard({
           </Button>
           {showDownload && (
             <DownloadButton
-              status={material.download_status || 'not_downloaded'}
-              onDownload={handleDownload}
+              status={displayStatus}
+              onDownload={download}
+              onRemove={remove}
               size="sm"
               variant="ghost"
               showLabel={false}
@@ -106,7 +108,7 @@ export function PDFCard({
                 <span>{formatFileSize(material.file_size)}</span>
               </p>
             </div>
-            {material.download_status === 'downloaded' && <DownloadBadge status="downloaded" />}
+            {displayStatus === 'downloaded' && <DownloadBadge status="downloaded" />}
           </CardContent>
         </Card>
       </Link>
@@ -120,7 +122,7 @@ export function PDFCard({
           <div className={cn('flex size-12 shrink-0 items-center justify-center rounded-xl shadow-inner', iconRing)}>
             <FileText className="size-7" strokeWidth={2} aria-hidden />
           </div>
-          <DownloadBadge status={material.download_status || 'not_downloaded'} />
+          <DownloadBadge status={displayStatus} />
         </div>
         <h3 className="mb-1 text-lg font-bold leading-snug text-foreground line-clamp-2">{material.title}</h3>
         {material.description && (
@@ -142,8 +144,9 @@ export function PDFCard({
           </Button>
           {showDownload && (
             <DownloadButton
-              status={material.download_status || 'not_downloaded'}
-              onDownload={handleDownload}
+              status={displayStatus}
+              onDownload={download}
+              onRemove={remove}
               size="icon"
               variant="outline"
               showLabel={false}

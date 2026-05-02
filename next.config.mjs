@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import withPWAInit from 'next-pwa'
+import withPWAInit from '@ducanh2912/next-pwa'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -10,6 +10,12 @@ const withPWA = withPWAInit({
   skipWaiting: true,
   disable: process.env.NODE_ENV === 'development',
   runtimeCaching: [
+    /** لا تخزّن طلبات API — كان Stale للصفحات يؤثر على مسارات PDF ويعيد صفحة/ردّاً خاطئاً داخل iframe */
+    {
+      urlPattern: ({ url, request }) =>
+        request.method === 'GET' && url.pathname.startsWith('/api/'),
+      handler: 'NetworkOnly',
+    },
     {
       urlPattern: /supabase\.co/i,
       handler: 'NetworkOnly',
@@ -25,6 +31,7 @@ const withPWA = withPWAInit({
     {
       urlPattern: ({ url, request }) => {
         if (request.method !== 'GET') return false
+        if (url.pathname.startsWith('/api/')) return false
         if (/supabase\.co/i.test(url.hostname)) return false
         if (/\.(?:js|css|woff2)(?:\?.*)?$/i.test(url.pathname)) return false
         return url.origin === self.location.origin

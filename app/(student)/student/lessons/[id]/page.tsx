@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation'
 
 import { StudentLessonDetail } from '@/components/student/lessons/student-lesson-detail'
 import { createClient } from '@/lib/supabase/server'
-import { requireStudentLayoutContext } from '@/lib/server/layout-gates'
+import { requireStudentContentAccess } from '@/lib/server/layout-gates'
 import { getSubscriberVideos, watchProgressForUser, getVideoById } from '@/lib/db/queries/videos'
 import { mergeLessonsWithProgress } from '@/lib/server/student-home-data'
 
@@ -27,7 +27,7 @@ export async function generateMetadata({ params }: LessonPageProps): Promise<Met
 
 export default async function LessonPage({ params }: LessonPageProps) {
   const { id } = await params
-  const { subscriptionStatus } = await requireStudentLayoutContext()
+  await requireStudentContentAccess()
   const supabase = await createClient()
   const {
     data: { session },
@@ -50,7 +50,7 @@ export default async function LessonPage({ params }: LessonPageProps) {
     <StudentLessonDetail
       lesson={lesson}
       relatedLessons={relatedLessons}
-      isSubscriptionExpired={subscriptionStatus === 'expired' || subscriptionStatus === 'none'}
+      isSubscriptionExpired={false}
     />
   )
 }

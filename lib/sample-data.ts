@@ -24,10 +24,11 @@ function buildDemoStudentRows(
     const status = s.subscription?.status
     const isActive = status === "active" || status === "expiring_soon"
     const plan = s.subscription?.plan_name ?? ""
-    const subscriptionType =
-      plan.includes("سنو") ? "premium"
-        : plan.includes("شهر") ? "monthly"
-        : "term"
+    const subscriptionType: DemoStudent["subscriptionType"] =
+      !isActive ? "pending"
+      : plan.includes("سنو") ? "premium"
+      : plan.includes("شهر") ? "monthly"
+      : "term"
 
     return {
       id: s.id,
@@ -37,6 +38,10 @@ function buildDemoStudentRows(
       isActive,
       subscriptionType,
       subscriptionEndDate: s.subscription?.end_date ?? null,
+      subscriptionRecordId: s.subscription?.id ?? null,
+      subscriptionPlanId: s.subscription?.plan_id ?? null,
+      subscriptionStartDate: s.subscription?.start_date ?? null,
+      subscriptionDbStatus: s.subscription?.status ?? null,
       createdAt: s.created_at,
     }
   })

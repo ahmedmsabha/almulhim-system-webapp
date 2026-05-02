@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -37,7 +37,19 @@ import {
   adminRemovePdf,
   adminUpdatePdf,
 } from "@/actions/admin-materials"
+import {
+  adminCommitPdfFromStorage,
+  adminRequestPdfSignedUpload,
+} from "@/actions/admin-media-pdf"
+import { AdminUploadOverlay } from "@/components/admin/admin-upload-overlay"
+import { uploadMaterialsPdfViaSignedToken } from "@/lib/client/admin-upload-xhr"
+import { PdfEmbedViewer } from "@/components/shared/media/pdf-embed-viewer"
 import type { PDFMaterial } from "@/types"
+
+function isPdfFile(f: File) {
+  const n = f.name.toLowerCase()
+  return f.type === "application/pdf" || n.endsWith(".pdf")
+}
 
 const CATEGORIES: PDFMaterial["category"][] = [
   "شرح",
@@ -67,10 +79,29 @@ export function AdminMaterialsClient({
   const [formSize, setFormSize] = useState("1000000")
   const [formPages, setFormPages] = useState("10")
   const [saving, setSaving] = useState(false)
+  const [pendingPdfFile, setPendingPdfFile] = useState<File | null>(null)
+  const pdfInputRef = useRef<HTMLInputElement>(null)
+  const [pdfUploadOverlay, setPdfUploadOverlay] = useState<{
+    pct: number
+    title: string
+    subtitle?: string
+  } | null>(null)
+  const [pdfDropOver, setPdfDropOver] = useState(false)
+  const [pdfBlobPreviewUrl, setPdfBlobPreviewUrl] = useState<string | null>(null)
 
   useEffect(() => {
     setMaterials(initialMaterials)
   }, [initialMaterials])
+
+  useEffect(() => {
+    if (!pendingPdfFile) {
+      setPdfBlobPreviewUrl(null)
+      return
+    }
+    const u = URL.createObjectURL(pendingPdfFile)
+    setPdfBlobPreviewUrl(u)
+    return () => URL.revokeObjectURL(u)
+  }, [pendingPdfFile])
 
   useEffect(() => {
     if (!autoOpenCreate) return
@@ -81,6 +112,7 @@ export function AdminMaterialsClient({
     setFormCategory("ملخصات")
     setFormSize("1000000")
     setFormPages("10")
+    setPendingPdfFile(null)
     setShowAddDialog(true)
   }, [autoOpenCreate])
 
@@ -102,6 +134,26 @@ export function AdminMaterialsClient({
     return matchesSearch && matchesCategory
   })
 
+  const applyPdfFromFileList = (list: FileList | null) => {
+    const first = list?.[0]
+    if (!first) return
+    if (!isPdfFile(first)) {
+      toast.error("يُسمح بملف PDF فقط")
+      return
+    }
+    setPendingPdfFile(first)
+  }
+
+  const handlePdfDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setPdfDropOver(false)
+    applyPdfFromFileList(e.dataTransfer.files)
+  }
+
+  const httpPdfPreview =
+    !pendingPdfFile && /^https?:\/\//i.test(formUrl.trim()) ? formUrl.trim() : null
+
   const openAdd = () => {
     setEditing(null)
     setFormTitle("")
@@ -110,6 +162,7 @@ export function AdminMaterialsClient({
     setFormCategory("ملخصات")
     setFormSize("1000000")
     setFormPages("10")
+    setPendingPdfFile(null)
     setShowAddDialog(true)
   }
 
@@ -121,6 +174,7 @@ export function AdminMaterialsClient({
     setFormCategory(m.category)
     setFormSize(String(m.file_size))
     setFormPages(String(m.page_count))
+    setPendingPdfFile(null)
     setShowAddDialog(true)
   }
 
@@ -151,14 +205,101 @@ export function AdminMaterialsClient({
   }
 
   const saveDialog = async () => {
-    const fileSize = parseInt(formSize, 10)
-    const pageCount = parseInt(formPages, 10)
-    if (!Number.isFinite(fileSize) || !Number.isFinite(pageCount)) {
-      toast.error("حجم الملف وعدد الصفحات يجب أن يكونا أرقاماً")
+    if (!formTitle.trim()) {
+      toast.error("أدخل عنواناً للملف")
       return
     }
+
     setSaving(true)
     try {
+      if (pendingPdfFile) {
+        setPdfUploadOverlay({
+          pct: 5,
+          title: "جاري تجهيز الرفع",
+          subtitle: "طلب رابط الرفع الآمن من الخادم",
+        })
+        try {
+          const sign = await adminRequestPdfSignedUpload()
+          if (!sign.success) {
+            toast.error(sign.error)
+            return
+          }
+
+          setPdfUploadOverlay({
+            pct: 12,
+            title: "رفع ملف PDF",
+            subtitle: pendingPdfFile.name,
+          })
+
+          await uploadMaterialsPdfViaSignedToken({
+            bucket: "materials",
+            storagePath: sign.data.path,
+            token: sign.data.token,
+            file: pendingPdfFile,
+            upsert: true,
+            onProgress: (p) => {
+              setPdfUploadOverlay((prev) =>
+                prev ?
+                  {
+                    ...prev,
+                    pct: 12 + Math.round(p * 0.68),
+                    subtitle: `${p}% من الملف على الشبكة`,
+                  }
+                : null
+              )
+            },
+          })
+
+          setPdfUploadOverlay({
+            pct: 82,
+            title: "إنهاء الحفظ",
+            subtitle: "قراءة النسخة من التخزين وعدّ الصفحات…",
+          })
+
+          const commit = await adminCommitPdfFromStorage({
+            storagePath: sign.data.path,
+            title: formTitle.trim(),
+            description: formDesc || null,
+            category: formCategory,
+            fileSizeBytes: pendingPdfFile.size,
+            mode: editing ? "update" : "create",
+            materialId: editing?.id,
+          })
+
+          if (!commit.success) {
+            toast.error(commit.error)
+            return
+          }
+
+          setPdfUploadOverlay({
+            pct: 100,
+            title: "اكتمل بنجاح",
+            subtitle: "جاري تحديث القائمة",
+          })
+          await new Promise((r) => setTimeout(r, 420))
+
+          toast.success(editing ? "تم تحديث الملف والرفع" : "تمت إضافة الملف والرفع إلى التخزين")
+          setPendingPdfFile(null)
+          if (pdfInputRef.current) pdfInputRef.current.value = ""
+          setShowAddDialog(false)
+          setEditing(null)
+          await refreshFromServer()
+          return
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "فشل الرفع")
+          return
+        } finally {
+          setPdfUploadOverlay(null)
+        }
+      }
+
+      const fileSize = parseInt(formSize, 10)
+      const pageCount = parseInt(formPages, 10)
+      if (!Number.isFinite(fileSize) || !Number.isFinite(pageCount)) {
+        toast.error("حجم الملف وعدد الصفحات يجب أن يكونا أرقاماً")
+        return
+      }
+
       if (editing) {
         const res = await adminUpdatePdf(editing.id, {
           title: formTitle.trim(),
@@ -336,10 +477,13 @@ export function AdminMaterialsClient({
           if (!open) {
             setShowAddDialog(false)
             setEditing(null)
+            setPendingPdfFile(null)
+            setPdfDropOver(false)
+            if (pdfInputRef.current) pdfInputRef.current.value = ""
           }
         }}
       >
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-4xl max-h-[92vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editing ? "تعديل الملف" : "إضافة ملف"}</DialogTitle>
           </DialogHeader>
@@ -352,9 +496,68 @@ export function AdminMaterialsClient({
               <label className="mb-1.5 block text-sm font-medium text-foreground">الوصف</label>
               <Textarea rows={3} value={formDesc} onChange={(e) => setFormDesc(e.target.value)} />
             </div>
+            <div
+              onDragEnter={(ev) => {
+                ev.preventDefault()
+                setPdfDropOver(true)
+              }}
+              onDragLeave={() => setPdfDropOver(false)}
+              onDragOver={(ev) => {
+                ev.preventDefault()
+                ev.stopPropagation()
+                setPdfDropOver(true)
+              }}
+              onDrop={handlePdfDrop}
+              className={`space-y-2 rounded-lg border border-dashed p-3 transition-colors ${
+                pdfDropOver ? "border-primary bg-primary/5" : "border-border"
+              }`}
+            >
+              <label className="block text-sm font-medium text-foreground">
+                رفع PDF إلى Supabase Storage
+              </label>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                يُنشئ الخادم رابطاً آمناً؛ يُفضَّل ضبط SUPABASE_SERVICE_ROLE_KEY في البيئة
+                وحاوية materials عامة القراءة (انظر scripts/008-supabase-storage-materials.sql).
+              </p>
+              <p className="text-xs font-medium text-muted-foreground">اسحب ملف PDF هنا أو:</p>
+              <input
+                ref={pdfInputRef}
+                type="file"
+                accept=".pdf,application/pdf"
+                className="hidden"
+                onChange={(e) => applyPdfFromFileList(e.target.files)}
+              />
+              <div className="flex flex-wrap gap-2 items-center">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => pdfInputRef.current?.click()}
+                >
+                  اختيار ملف PDF
+                </Button>
+                {pendingPdfFile ?
+                  <span className="text-xs text-muted-foreground truncate max-w-[220px]" dir="ltr">
+                    {pendingPdfFile.name}
+                  </span>
+                : null}
+              </div>
+              {pendingPdfFile ?
+                <p className="text-xs text-chart-2">
+                  عند الحفظ سيتم الرفع ثم احتساب عدد الصفحات تلقائياً (الحقول أدناه تُستخدم لرابط يدوي فقط).
+                </p>
+              : null}
+            </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-foreground">رابط الملف</label>
-              <Input dir="ltr" value={formUrl} onChange={(e) => setFormUrl(e.target.value)} />
+              <label className="mb-1.5 block text-sm font-medium text-foreground">
+                رابط الملف (يدوي — اختياري)
+              </label>
+              <Input
+                dir="ltr"
+                value={formUrl}
+                onChange={(e) => setFormUrl(e.target.value)}
+                disabled={!!pendingPdfFile}
+              />
             </div>
             <div>
               <label className="mb-1.5 block text-sm font-medium text-foreground">التصنيف</label>
@@ -375,31 +578,64 @@ export function AdminMaterialsClient({
                 <label className="mb-1.5 block text-sm font-medium text-foreground">
                   الحجم (بايت)
                 </label>
-                <Input value={formSize} onChange={(e) => setFormSize(e.target.value)} />
+                <Input
+                  value={formSize}
+                  onChange={(e) => setFormSize(e.target.value)}
+                  disabled={!!pendingPdfFile}
+                />
               </div>
               <div>
                 <label className="mb-1.5 block text-sm font-medium text-foreground">عدد الصفحات</label>
-                <Input value={formPages} onChange={(e) => setFormPages(e.target.value)} />
+                <Input
+                  value={formPages}
+                  onChange={(e) => setFormPages(e.target.value)}
+                  disabled={!!pendingPdfFile}
+                />
               </div>
             </div>
+            {(pdfBlobPreviewUrl || httpPdfPreview) ?
+              <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
+                <p className="text-sm font-medium">معاينة للمعلّم</p>
+                <PdfEmbedViewer
+                  src={pdfBlobPreviewUrl ?? httpPdfPreview!}
+                  title={formTitle || "معاينة"}
+                  allowExternalTab
+                  frameClassName="min-h-[38vh] sm:min-h-[44vh]"
+                />
+              </div>
+            : null}
           </div>
           <DialogFooter className="gap-2">
             <Button
               type="button"
               variant="outline"
+              disabled={pdfUploadOverlay !== null}
               onClick={() => {
                 setShowAddDialog(false)
                 setEditing(null)
+                setPendingPdfFile(null)
+                if (pdfInputRef.current) pdfInputRef.current.value = ""
               }}
             >
               إلغاء
             </Button>
-            <Button type="button" disabled={saving || !formTitle.trim()} onClick={() => void saveDialog()}>
-              {editing ? "حفظ" : "إضافة"}
+            <Button
+              type="button"
+              disabled={saving || pdfUploadOverlay !== null || !formTitle.trim()}
+              onClick={() => void saveDialog()}
+            >
+              {pendingPdfFile ? (editing ? "رفع وتحديث" : "رفع وإضافة") : editing ? "حفظ" : "إضافة"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AdminUploadOverlay
+        open={pdfUploadOverlay !== null}
+        percent={pdfUploadOverlay?.pct ?? 0}
+        title={pdfUploadOverlay?.title ?? ""}
+        subtitle={pdfUploadOverlay?.subtitle}
+      />
     </div>
   )
 }

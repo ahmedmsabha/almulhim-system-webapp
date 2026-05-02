@@ -44,7 +44,9 @@ export function RegisterForm() {
         toast.error(result.error)
         return
       }
-      toast.success('تحقق من بريدك — أرسلنا لك رمز تأكيد')
+      toast.success(
+        'تحقق من بريدك واضغط رابط تأكيد الحساب في الرسالة. إذا وصلك رمز من 6 أرقام يمكنك إدخاله هنا أيضاً.'
+      )
       router.push(`/verify?email=${encodeURIComponent(parsed.data.email.trim())}`)
     } catch {
       toast.error('تعذّر إنشاء الحساب. حاول مجدداً.')

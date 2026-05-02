@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation'
 
 import { MessagesContent } from './messages-content'
 import { createClient } from '@/lib/supabase/server'
-import { requireStudentLayoutContext } from '@/lib/server/layout-gates'
+import { requireStudentContentAccess } from '@/lib/server/layout-gates'
 import {
   getDefaultAdminContact,
   getMessages,
@@ -16,7 +16,7 @@ export const metadata: Metadata = {
 }
 
 export default async function MessagesPage() {
-  const { profile } = await requireStudentLayoutContext()
+  const { profile } = await requireStudentContentAccess()
   const supabase = await createClient()
   const {
     data: { session },

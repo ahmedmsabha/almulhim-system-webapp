@@ -4,8 +4,10 @@ import { LessonsContent } from './lessons-content'
 import { createClient } from '@/lib/supabase/server'
 import { getSubscriberVideos, watchProgressForUser } from '@/lib/db/queries/videos'
 import { mergeLessonsWithProgress } from '@/lib/server/student-home-data'
+import { requireStudentContentAccess } from '@/lib/server/layout-gates'
 
 export default async function LessonsPage() {
+  await requireStudentContentAccess()
   const supabase = await createClient()
   const {
     data: { session },

@@ -7,7 +7,7 @@ import { BRAND } from '@/lib/config'
 
 export const metadata: Metadata = {
   title: 'تأكيد البريد',
-  description: `أدخل رمز التحقق المرسل إلى بريدك — ${BRAND.taglineAr}`,
+  description: `أكّد بريدك عبر الرابط في الرسالة أو برمز التحقق إن وُجد — ${BRAND.taglineAr}`,
 }
 
 type PageProps = {
@@ -28,7 +28,7 @@ export default async function VerifyPage({ searchParams }: PageProps) {
           </Link>
           <h1 className="mb-2 text-2xl font-bold">تأكيد البريد الإلكتروني</h1>
           <p className="text-muted-foreground">
-            أدخل الرمز المكوّن من 6 أرقام المرسل إلى بريدك
+            افتح رسالة التأكيد واضغط الرابط أولاً. حقل الرمز يُستخدم فقط إذا ظهر لك في البريد رقم من 6 أرقام.
           </p>
         </div>
 

@@ -22,6 +22,10 @@ export type {
   NewMessage,
   CouponRow,
   NewCoupon,
+  AppSettingRow,
+  NewAppSettingRow,
+  SubscriptionLeadRow,
+  NewSubscriptionLeadRow,
 } from "@/lib/db/schema"
 
 /** Domain models serialized for app layers (ISO date strings, narrowed unions). */
@@ -183,9 +187,17 @@ export interface DemoStudent {
   name: string
   email: string
   phone: string
+  /** يعكس وجود اشتراك يمنح الوصول للمحتوى (نشط أو يوشك على الانتهاء) */
   isActive: boolean
-  subscriptionType: "premium" | "monthly" | "term"
+  /** يعرض نوع الباقة عند التفعيل؛ `pending` إذا لم يُفعَّل اشتراك بعد أو انتهى/أُلغي آخر اشتراك */
+  subscriptionType: "premium" | "monthly" | "term" | "pending"
   subscriptionEndDate?: string | null
+  /** أحدث صف اشتراك في الجدول — لتمديده أو تعديله */
+  subscriptionRecordId?: string | null
+  subscriptionPlanId?: string | null
+  subscriptionStartDate?: string | null
+  /** الحالة الخام في الجدول (قبل استنتاج انتهاء الصلاحية من التاريخ) */
+  subscriptionDbStatus?: string | null
   createdAt: string
   /** وجود صف ربط جهاز في قاعدة البيانات */
   hasDeviceBinding?: boolean

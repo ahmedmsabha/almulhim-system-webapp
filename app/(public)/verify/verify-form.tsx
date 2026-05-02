@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { Mail } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { verifyOtpAction } from '@/actions/authActions'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -64,6 +66,24 @@ export function VerifyEmailForm({ emailFromQuery }: VerifyFormProps) {
   return (
     <Card>
       <CardContent className="space-y-4 pt-6">
+        <Alert className="border-primary/20 bg-primary/5">
+          <Mail className="text-primary" aria-hidden />
+          <AlertTitle className="text-foreground">استخدم الرابط في البريد أولاً</AlertTitle>
+          <AlertDescription>
+            رسائل Supabase الافتراضية ترسل زراً أو رابط تأكيداً وليس رمزاً من الأرقام. بعد الضغط على الرابط يُفعَّل
+            حسابك تلقائياً ويُفتح لك الدخول إلى المنصّة.
+          </AlertDescription>
+        </Alert>
+
+        <div className="relative py-2">
+          <div className="absolute inset-0 flex items-center" aria-hidden>
+            <span className="w-full border-t" />
+          </div>
+          <div className="relative flex justify-center text-xs uppercase tracking-wide">
+            <span className="bg-card px-2 text-muted-foreground">أو إذا وصلك رمز من 6 أرقام</span>
+          </div>
+        </div>
+
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="verify-email">البريد الإلكتروني</Label>
@@ -89,7 +109,7 @@ export function VerifyEmailForm({ emailFromQuery }: VerifyFormProps) {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="otp">رمز التحقق (6 أرقام)</Label>
+            <Label htmlFor="otp">رمز التحقق (6 أرقام) — إن وُجد في الرسالة</Label>
             <Input
               id="otp"
               inputMode="numeric"
@@ -119,11 +139,12 @@ export function VerifyEmailForm({ emailFromQuery }: VerifyFormProps) {
         </form>
 
         <p className="text-center text-sm text-muted-foreground">
-          لم تستلم الرمز؟ راجع مجلد الرسائل غير المرغوبة أو{' '}
+          لم يعمل الرابط أو لم يصلك شيء؟ راجع مجلد الرسائل غير المرغوبة، وتأكّد في لوحة Supabase أن عنوان موقعك مضاف ضمن{' '}
+          <span className="whitespace-nowrap">Redirect URLs</span>. يمكنك أيضاً{' '}
           <Link href="/login" className="text-primary hover:underline">
-            سجّل الدخول
+            تجربة تسجيل الدخول
           </Link>{' '}
-          إن كنت مفعّلاً مسبقاً.
+          إن كان حسابك أصبح مفعّلاً.
         </p>
       </CardContent>
     </Card>

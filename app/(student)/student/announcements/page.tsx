@@ -7,6 +7,7 @@ import { Bell } from 'lucide-react'
 import { getMonthStickyLabel } from '@/lib/format-relative-ar'
 import { createClient } from '@/lib/supabase/server'
 import { getAnnouncements } from '@/lib/db/queries/announcements'
+import { requireStudentContentAccess } from '@/lib/server/layout-gates'
 
 export const metadata: Metadata = {
   title: 'الإعلانات',
@@ -19,6 +20,7 @@ function monthStamp(isoDate: string): string {
 }
 
 export default async function AnnouncementsPage() {
+  await requireStudentContentAccess()
   const supabase = await createClient()
   const {
     data: { session },

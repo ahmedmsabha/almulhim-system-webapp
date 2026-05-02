@@ -2,16 +2,12 @@
 
 import { useCallback, useEffect, useState } from 'react'
 
-function readNavigatorOnline(): boolean {
-  try {
-    return typeof navigator !== 'undefined' ? navigator.onLine : true
-  } catch {
-    return true
-  }
-}
-
+/**
+ * الحالة الأولى ثابتة (متصل) لتطابق SSR وأول إطار على العميل — ثم المزامنة من navigator بعد التثبيت.
+ * يمنع تعارض الترطيب كما في OfflineBanner.
+ */
 export function useOnlineStatus(): { isOnline: boolean } {
-  const [isOnline, setIsOnline] = useState(readNavigatorOnline)
+  const [isOnline, setIsOnline] = useState(true)
 
   const sync = useCallback(() => {
     try {

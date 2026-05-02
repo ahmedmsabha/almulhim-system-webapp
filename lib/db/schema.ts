@@ -161,6 +161,27 @@ export const messages = pgTable("messages", {
   created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 })
 
+/** صف واحد (`id = site`) لإعدادات عامة تظهر في صفحة الاشتراك ويمكن للمشرف تعديلها. */
+export const appSetting = pgTable("app_setting", {
+  id: text("id").primaryKey(),
+  whatsapp_url: text("whatsapp_url"),
+  telegram_url: text("telegram_url"),
+  grades_json: text("grades_json").notNull().default("[]"),
+  subscribe_page_note_ar: text("subscribe_page_note_ar"),
+  updated_at: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+})
+
+/** طلبات اشتراك واردة من النموذج العام (لمتابعتها يدوياً). */
+export const subscriptionLeads = pgTable("subscription_leads", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  student_name: text("student_name").notNull(),
+  phone: text("phone").notNull(),
+  grade: text("grade").notNull(),
+  plan_id: uuid("plan_id").references(() => subscriptionPlans.id, { onDelete: "set null" }),
+  notes: text("notes"),
+  created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+})
+
 export const coupons = pgTable(
   "coupons",
   {
@@ -207,6 +228,10 @@ export type ConversationRow = typeof conversations.$inferSelect
 export type NewConversation = typeof conversations.$inferInsert
 export type MessageRow = typeof messages.$inferSelect
 export type NewMessage = typeof messages.$inferInsert
+export type AppSettingRow = typeof appSetting.$inferSelect
+export type NewAppSettingRow = typeof appSetting.$inferInsert
+export type SubscriptionLeadRow = typeof subscriptionLeads.$inferSelect
+export type NewSubscriptionLeadRow = typeof subscriptionLeads.$inferInsert
 export type CouponRow = typeof coupons.$inferSelect
 export type NewCoupon = typeof coupons.$inferInsert
 export type StudentDeviceBindingRow = typeof studentDeviceBindings.$inferSelect

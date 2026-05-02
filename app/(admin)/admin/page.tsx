@@ -250,13 +250,17 @@ export default function AdminDashboard() {
                           ? "bg-chart-4/10 text-chart-4"
                           : student.subscriptionType === "monthly"
                           ? "bg-primary/10 text-primary"
+                          : student.subscriptionType === "term"
+                          ? "bg-accent/15 text-accent-foreground"
                           : "bg-muted text-muted-foreground"
                       }`}>
                         {student.subscriptionType === "premium"
                           ? "مميز"
                           : student.subscriptionType === "monthly"
                           ? "شهري"
-                          : "مجاني"}
+                          : student.subscriptionType === "term"
+                          ? "فصلي"
+                          : "بانتظار التفعيل"}
                       </span>
                     </td>
                     <td className="py-3">

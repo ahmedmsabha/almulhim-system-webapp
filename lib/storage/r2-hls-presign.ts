@@ -1,6 +1,11 @@
 import "server-only"
 
-import { GetObjectCommand, type GetObjectCommandOutput, S3Client } from "@aws-sdk/client-s3"
+import {
+  GetObjectCommand,
+  PutObjectCommand,
+  type GetObjectCommandOutput,
+  S3Client,
+} from "@aws-sdk/client-s3"
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
 
 import { OFFLINE_KEY_PLACEHOLDER, offlineSegmentPlaceholder } from "@/lib/offline/constants"
@@ -23,6 +28,35 @@ export function isR2Configured(): boolean {
       process.env.R2_SECRET_ACCESS_KEY?.trim() &&
       process.env.R2_BUCKET_NAME?.trim()
   )
+}
+
+/** Origin shown to browsers for GET (custom domain or public bucket URL). */
+export function getR2PublicBaseUrl(): string | null {
+  const u = process.env.NEXT_PUBLIC_R2_PUBLIC_BASE_URL?.trim()
+  return u ? u.replace(/\/$/, "") : null
+}
+
+/** Presigned PUT uploads + constructing master playlist URLs after upload. */
+export function isR2BrowserUploadConfigured(): boolean {
+  return isR2Configured() && Boolean(getR2PublicBaseUrl())
+}
+
+export async function presignR2PutObject(
+  objectKey: string,
+  contentType: string,
+  expiresInSeconds = 3600
+): Promise<string> {
+  if (!isR2Configured()) {
+    throw new Error("R2 is not configured")
+  }
+  const client = getS3Client()
+  const bucket = getBucket()
+  const cmd = new PutObjectCommand({
+    Bucket: bucket,
+    Key: objectKey,
+    ContentType: contentType,
+  })
+  return getSignedUrl(client, cmd, { expiresIn: expiresInSeconds })
 }
 
 function getS3Client(): S3Client {

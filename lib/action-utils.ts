@@ -33,5 +33,8 @@ export function mapCaughtErrorToAction(e: unknown): ActionFailure {
   if (e instanceof DatabaseError) {
     return actionFailure("Unable to complete the request", "DATABASE_ERROR")
   }
+  if (e instanceof Error && e.message.trim()) {
+    return actionFailure(e.message.trim(), "UNKNOWN")
+  }
   return actionFailure("Something went wrong", "UNKNOWN")
 }

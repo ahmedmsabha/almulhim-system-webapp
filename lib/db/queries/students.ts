@@ -23,6 +23,7 @@ import {
   subscriptions,
 } from "@/lib/db/schema"
 import type { SubscriptionRow } from "@/lib/db/schema"
+import { ResourceNotFoundError } from "@/lib/db/errors"
 import type { Profile, Subscription as StudentSubscriptionType } from "@/types"
 
 function mapDbProfile(row: typeof profiles.$inferSelect): Profile {
@@ -195,11 +196,57 @@ export async function renewSubscription(subscriptionId: string, newEndDate: Date
     .where(eq(subscriptions.id, subscriptionId))
 }
 
+export type AdminSubscriptionPatch = {
+  planId?: string
+  startDate?: Date
+  endDate?: Date
+  status?: string
+}
+
+/** تحديث صف اشتراك موجود (خطة، تواريخ، حالة). يستخدم من لوحة المعلّم. */
+export async function updateSubscriptionRecord(
+  subscriptionId: string,
+  patch: AdminSubscriptionPatch
+): Promise<void> {
+  const rowUpdates: Partial<typeof subscriptions.$inferInsert> & { updated_at: Date } = {
+    updated_at: new Date(),
+  }
+
+  if (patch.planId !== undefined) {
+    const [plan] = await adminDb
+      .select()
+      .from(subscriptionPlans)
+      .where(eq(subscriptionPlans.id, patch.planId))
+      .limit(1)
+    rowUpdates.plan_id = patch.planId
+    rowUpdates.plan_name = plan?.name ?? null
+  }
+  if (patch.startDate !== undefined) rowUpdates.start_date = patch.startDate
+  if (patch.endDate !== undefined) rowUpdates.end_date = patch.endDate
+  if (patch.status !== undefined) rowUpdates.status = patch.status
+
+  await adminDb.update(subscriptions).set(rowUpdates).where(eq(subscriptions.id, subscriptionId))
+}
+
 export async function deactivateSubscription(subscriptionId: string): Promise<void> {
   await adminDb
     .update(subscriptions)
     .set({ status: "cancelled", updated_at: new Date() })
     .where(eq(subscriptions.id, subscriptionId))
+}
+
+export async function assertSubscriptionOwnedByStudent(
+  subscriptionId: string,
+  studentId: string
+): Promise<void> {
+  const [row] = await adminDb
+    .select({ student_id: subscriptions.student_id })
+    .from(subscriptions)
+    .where(eq(subscriptions.id, subscriptionId))
+    .limit(1)
+  if (!row || row.student_id !== studentId) {
+    throw new ResourceNotFoundError("الاشتراك غير موجود")
+  }
 }
 
 export async function getExpiringSubscriptions(

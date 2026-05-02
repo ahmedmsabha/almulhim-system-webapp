@@ -30,7 +30,6 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { signOutAction } from '@/actions/auth'
-import { StudentDeviceGate } from '@/components/student/student-device-gate'
 import type { Profile, Subscription, StudentSubscriptionUiStatus } from '@/types'
 
 const navItems = [
@@ -246,9 +245,7 @@ export function StudentAppShell({
           </div>
         </header>
       </div>
-      <main className="student-ui container mx-auto px-4 py-6 sm:py-8">
-        <StudentDeviceGate>{children}</StudentDeviceGate>
-      </main>
+      <main className="student-ui container mx-auto px-4 py-6 sm:py-8">{children}</main>
     </div>
   )
 }
