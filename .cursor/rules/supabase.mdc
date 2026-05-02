@@ -1,0 +1,30 @@
+---
+description: Rules for Supabase client usage, auth, and RLS
+globs: ["**/*.ts", "**/*.tsx"]
+alwaysApply: false
+---
+
+# Supabase Rules
+
+## Client Setup
+- Use `createServerClient` for Server Components & Server Actions
+- Use `createBrowserClient` ONLY in `"use client"` components
+- Never import server client in client components
+
+## Auth Pattern
+```typescript
+// ✅ Correct — Server Action
+import { createServerClient } from '@/lib/supabase/server'
+
+export async function getUser() {
+  const supabase = await createServerClient()
+  const { data: { user }, error } = await supabase.auth.getUser()
+  if (error || !user) redirect('/login')
+  return user
+}
+```
+
+## RLS Awareness
+- Prisma/Drizzle bypass RLS — always add manual auth checks in Server Actions
+- Never trust client-side session for sensitive operations
+- Use `service_role` only in trusted server-side admin operations

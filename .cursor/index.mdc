@@ -1,0 +1,84 @@
+---
+alwaysApply: true
+---
+
+# PROJECT MASTER CONTEXT
+
+## Project Overview
+- **Name:** [اسم مشروعك]
+- **Stack:** Next.js 16 (App Router) + Supabase (PostgreSQL) + Drizzle ORM / Prisma
+- **Language:** TypeScript (strict mode)
+- **Styling:** Tailwind CSS
+- **Auth:** Supabase Auth (SSR-aware)
+
+---
+
+## Architecture Rules
+
+### Folder Structure
+src/
+├── app/ # App Router pages & layouts
+│ ├── (auth)/ # Auth route group
+│ ├── (dashboard)/ # Protected route group
+│ └── api/ # API routes
+├── components/
+│ ├── ui/ # Reusable UI components
+│ └── features/ # Feature-specific components
+├── lib/
+│ ├── supabase/ # Supabase clients (server/client)
+│ ├── db/ # ORM schema & queries
+│ └── utils/ # Helper functions
+├── hooks/ # Custom React hooks
+├── types/ # Global TypeScript types
+└── actions/ # Server Actions
+
+### Component Rules
+- Max **200 lines** per component file — split if longer
+- Use **Server Components** by default; add `"use client"` only when needed
+- Prefer **Server Actions** over API routes for mutations
+- Export one component per file, named same as filename
+
+---
+
+## Code Style
+
+- **TypeScript:** Always define explicit return types for functions
+- **Imports:** Use `@/` alias, not relative paths like `../../`
+- **Async/Await:** Never use `.then()` chains — always `async/await`
+- **Error Handling:** Wrap every async operation in try/catch
+- **Variables:** `const` by default; `let` only when reassignment needed
+- **No `any`:** Never use `any` type — use `unknown` or define proper types
+
+---
+
+## Naming Conventions
+
+| Entity | Convention | Example |
+|---|---|---|
+| Components | PascalCase | `UserProfile.tsx` |
+| Hooks | camelCase + use | `useAuthSession.ts` |
+| Server Actions | camelCase + Action | `createPostAction.ts` |
+| DB Tables | snake_case | `user_profiles` |
+| Types/Interfaces | PascalCase + T/I | `TUser`, `IPost` |
+| Constants | SCREAMING_SNAKE | `MAX_FILE_SIZE` |
+
+---
+
+## Security Rules
+
+- NEVER expose `SUPABASE_SERVICE_ROLE_KEY` to the client
+- NEVER log passwords, tokens, or sensitive data
+- ALWAYS validate inputs with **Zod** before processing
+- ALWAYS use parameterized queries — no string interpolation in SQL
+- Server Actions must verify **auth session** before any DB operation
+
+---
+
+## Response Format for AI
+
+When making any change:
+1. State **what** you're changing and **why**
+2. Show only the **modified sections**, not the entire file
+3. If adding a new dependency, mention the install command
+4. Flag any **breaking changes** explicitly
+5. Keep responses concise — no filler text

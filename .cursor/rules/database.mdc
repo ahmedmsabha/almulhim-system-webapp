@@ -1,0 +1,35 @@
+---
+description: ORM patterns for Drizzle or Prisma with Supabase
+globs: ["**/db/**", "**/actions/**"]
+alwaysApply: false
+---
+
+# Database Rules
+
+## Query Patterns
+- All DB queries go in `src/lib/db/queries/` — not inline in components
+- Group queries by feature: `users.ts`, `posts.ts`
+- Always handle `null` returns — never assume data exists
+
+## Drizzle Pattern
+```typescript
+// ✅ Correct query structure
+export async function getUserById(id: string) {
+  try {
+    const result = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, id))
+      .limit(1)
+    return result ?? null
+  } catch (error) {
+    console.error('[getUserById]', error)
+    return null
+  }
+}
+```
+
+## Migrations
+- Never edit migration files manually after applying
+- Always run `drizzle-kit generate` after schema changes
+- Test migrations on dev DB before staging
