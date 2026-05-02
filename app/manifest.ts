@@ -2,6 +2,7 @@ import type { MetadataRoute } from 'next'
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
+    id: '/',
     name: 'منصة الفيزياء',
     short_name: 'الفيزياء',
     description: 'منصة فيزياء التوجيهي — فلسطين',

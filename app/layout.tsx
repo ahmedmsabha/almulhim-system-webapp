@@ -3,6 +3,10 @@ import { IBM_Plex_Sans_Arabic, Geist_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import { Toaster } from 'sonner'
 import { APP_METADATA, BRAND } from '@/lib/config'
+import { InstallPrompt } from '@/components/InstallPrompt'
+import { IOSInstallBanner } from '@/components/IOSInstallBanner'
+import { MacSafariInstallBanner } from '@/components/MacSafariInstallBanner'
+import { OfflineBanner } from '@/components/OfflineBanner'
 import './globals.css'
 
 const ibmPlexArabic = IBM_Plex_Sans_Arabic({
@@ -66,6 +70,10 @@ export default function RootLayout({
         <link rel="apple-touch-startup-image" href="/icons/splash.png" />
       </head>
       <body className={`${ibmPlexArabic.variable} ${geistMono.variable} font-sans antialiased min-h-screen`}>
+        <InstallPrompt />
+        <IOSInstallBanner />
+        <MacSafariInstallBanner />
+        <OfflineBanner />
         {children}
         <Toaster 
           position="top-center" 
