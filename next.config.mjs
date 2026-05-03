@@ -5,6 +5,29 @@ import withPWAInit from '@ducanh2912/next-pwa'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 /**
+ * أصول مسموح تنفيذ Server Actions منها — على Vercel غالباً يطابق المضيف `x-forwarded-host`.
+ * عند استخدام نطاق مخصص: ضع `NEXT_PUBLIC_SITE_URL=https://your-domain.com` في Vercel.
+ */
+function serverActionAllowedOrigins() {
+  const hosts = new Set(['localhost:3000', '127.0.0.1:3000', '*.vercel.app'])
+  const vercel = process.env.VERCEL_URL?.trim()
+  if (vercel) {
+    const h = vercel.replace(/^https?:\/\//, '').split('/')[0]?.toLowerCase()
+    if (h) hosts.add(h)
+  }
+  const site = process.env.NEXT_PUBLIC_SITE_URL?.trim()
+  if (site) {
+    try {
+      const h = new URL(site).host.toLowerCase()
+      if (h) hosts.add(h)
+    } catch {
+      /* ignore */
+    }
+  }
+  return [...hosts]
+}
+
+/**
  * تخزين وقت التشغيل يُمرَّر عبر workboxOptions وليس top-level — وإلا يُتجاهل.
  * extendDefaultRuntimeCaching + نفس cacheName يستبدل الافتراضي (NetworkFirst → SWR للصفحات).
  */
@@ -121,6 +144,13 @@ const withPWA = withPWAInit({
 const nextConfig = {
   turbopack: {
     root: __dirname,
+  },
+  experimental: {
+    serverActions: {
+      /** رفع PDF + ميتاداتا؛ الافتراضي 1MB قد يقطع طلبات الإجراء على الإنتاج */
+      bodySizeLimit: '12mb',
+      allowedOrigins: serverActionAllowedOrigins(),
+    },
   },
   typescript: {
     ignoreBuildErrors: true,

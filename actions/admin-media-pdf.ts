@@ -150,9 +150,9 @@ export async function adminRequestPdfSignedUpload(): Promise<
 
     if (error || !data?.signedUrl || !data.token) {
       const hint =
-        "تأكد من وجود حاوية materials في Storage، ومن ضبط SUPABASE_SERVICE_ROLE_KEY في الخادم لتمكين روابط الرفع الآمنة."
+        "تأكد من حاوية materials في Storage، ومن ضبط SUPABASE_SERVICE_ROLE_KEY في Vercel (Production) — المحلي يقرأ .env.local فغالباً «يشتغل عندك فقط». بدون مفتاح الخدمة قد يرفض الإنشاء على الإنتاج."
       return actionFailure(
-        error?.message ? `${error.message}. ${hint}` : hint,
+        error?.message ? `${error.message} — ${hint}` : hint,
         "UNKNOWN"
       )
     }

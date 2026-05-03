@@ -74,10 +74,21 @@ export function xhrPutFormData(
         resolve()
       } else {
         const hint = xhr.responseText?.slice(0, 280) || xhr.statusText
-        reject(new Error(`فشل الرفع (${xhr.status}): ${hint}`))
+        reject(
+          new Error(
+            xhr.status === 0 ?
+              "فشل الاتصال بالتخزين (غالباً CORS). في Supabase: لوحة المشروع → Storage → سمح بأصل موقعك (أو عدّل config.yml للتخزين) ليشمل https://….vercel.app والنطاق المخصص إن وُجد."
+            : `فشل الرفع (${xhr.status}): ${hint}`
+          )
+        )
       }
     }
-    xhr.onerror = () => reject(new Error("خطأ شبكة أثناء الرفع"))
+    xhr.onerror = () =>
+      reject(
+        new Error(
+          "خطأ شبكة أثناء الرفع إلى Supabase (XHR). غالباً CORS: أضف أصل Vercel والنطاق المخصص لسياسة التخزين."
+        )
+      )
     xhr.send(body)
   })
 }
