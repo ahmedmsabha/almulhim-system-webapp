@@ -7,7 +7,7 @@ import type { Announcement as AnnouncementType } from "@/types"
 
 import { adminDb, withUserDb, type UserDb } from "@/lib/db/client"
 
-function rowToAnnouncement(row: AnnouncementRow): AnnouncementType {
+export function rowToAnnouncement(row: AnnouncementRow): AnnouncementType {
   return {
     id: row.id,
     title: row.title,
@@ -30,7 +30,7 @@ export async function getAnnouncements(
   )
 }
 
-async function fetchAnnouncementsForTx(
+export async function fetchAnnouncementsForTx(
   tx: UserDb,
   options?: { is_published?: boolean }
 ): Promise<AnnouncementRow[]> {

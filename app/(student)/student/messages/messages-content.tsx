@@ -1,40 +1,12 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { useCallback } from 'react'
+
+import { markAsRead, sendStudentMessage } from '@/actions/messages'
+import { ChatThread } from '@/components/chat/chat-thread'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { Send, CheckCircle, Clock } from 'lucide-react'
-import { cn } from '@/lib/utils'
-import { toast } from 'sonner'
-import { sendMessage as sendMessageAction } from '@/actions/messages'
-import type { Message } from '@/types'
-
-function formatMessageTime(dateString: string): string {
-  const date = new Date(dateString)
-  const now = new Date()
-  const diff = now.getTime() - date.getTime()
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24))
-
-  if (days === 0) {
-    return date.toLocaleTimeString('ar-EG', {
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  } else if (days === 1) {
-    return 'أمس'
-  } else if (days < 7) {
-    return `منذ ${days} أيام`
-  } else {
-    return date.toLocaleDateString('ar-EG', {
-      month: 'short',
-      day: 'numeric',
-    })
-  }
-}
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import type { Message, MessageAttachment } from '@/types'
 
 export function MessagesContent({
   conversationId,
@@ -51,139 +23,39 @@ export function MessagesContent({
   adminAvatarUrl: string | null
   initialMessages: Message[]
 }) {
-  const router = useRouter()
-  const [newMessage, setNewMessage] = useState('')
-  const [messages, setMessages] = useState(initialMessages)
-  const [sending, setSending] = useState(false)
-
-  useEffect(() => {
-    setMessages(initialMessages)
-  }, [initialMessages])
-
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault()
-    const text = newMessage.trim()
-    if (!text || sending) return
-
-    setSending(true)
-    try {
-      const result = await sendMessageAction({
-        conversationId,
-        senderId: studentId,
-        content: text,
-      })
-      if (!result.success) {
-        toast.error(result.error)
-        return
-      }
-      setNewMessage('')
-      router.refresh()
-    } catch {
-      toast.error('تعذر إرسال الرسالة')
-    } finally {
-      setSending(false)
-    }
-  }
-
   const studentInitial = studentName.trim()[0] ?? '?'
   const adminInitial = adminName.trim()[0] ?? 'م'
+
+  const markReadOnMount = useCallback(() => markAsRead(conversationId), [conversationId])
+
+  const onSend = useCallback(
+    (content: string, attachments: MessageAttachment[]) =>
+      sendStudentMessage({ conversationId, content, attachments }),
+    [conversationId]
+  )
 
   return (
     <div className="space-y-8">
       <header>
         <h1 className="page-title-student">الرسائل</h1>
         <p className="page-subtitle-student">
-          طرح أسئلتك بخصوص الدروس والتجارب — المعلِّم يرى المحادثة هنا
+          طرح أسئلتك بخصوص الدروس والتجارب — تواصل مباشر مع المعلِّم (نص، صور، PDF، صوت)
         </p>
       </header>
 
       <div className="grid gap-6 lg:grid-cols-3 items-start">
-        <Card className="lg:col-span-2">
-          <CardHeader className="border-b">
-            <div className="flex items-center gap-3">
-              <Avatar>
-                <AvatarImage src={adminAvatarUrl || undefined} />
-                <AvatarFallback>{adminInitial}</AvatarFallback>
-              </Avatar>
-              <div>
-                <CardTitle className="text-base">{adminName}</CardTitle>
-                <p className="text-xs text-muted-foreground">المدرس</p>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="p-0">
-            <ScrollArea className="h-[50vh] p-4">
-              <div className="space-y-4">
-                {messages.map((message) => {
-                  const isStudent = message.sender_role === 'student'
-                  return (
-                    <div
-                      key={message.id}
-                      className={cn(
-                        'flex gap-3',
-                        isStudent && 'flex-row-reverse'
-                      )}
-                    >
-                      <Avatar className="h-8 w-8 flex-shrink-0">
-                        <AvatarFallback>
-                          {isStudent ? studentInitial : adminInitial}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div
-                        className={cn(
-                          'max-w-[70%] rounded-2xl px-4 py-2',
-                          isStudent
-                            ? 'bg-primary text-primary-foreground rounded-br-sm'
-                            : 'bg-muted rounded-bl-sm'
-                        )}
-                      >
-                        <p className="text-sm leading-relaxed">{message.content}</p>
-                        <div
-                          className={cn(
-                            'mt-1 flex items-center gap-1 text-xs',
-                            isStudent
-                              ? 'text-primary-foreground/70 justify-start'
-                              : 'text-muted-foreground justify-end'
-                          )}
-                        >
-                          <span>{formatMessageTime(message.created_at)}</span>
-                          {isStudent && (
-                            message.is_read ? (
-                              <CheckCircle className="h-3 w-3" />
-                            ) : (
-                              <Clock className="h-3 w-3" />
-                            )
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </ScrollArea>
-
-            <form
-              onSubmit={handleSendMessage}
-              className="flex items-center gap-2 border-t p-4"
-            >
-              <Input
-                placeholder="اكتب رسالتك..."
-                value={newMessage}
-                onChange={(e) => setNewMessage(e.target.value)}
-                className="flex-1"
-                disabled={sending}
-              />
-              <Button
-                type="submit"
-                size="icon"
-                disabled={!newMessage.trim() || sending}
-                className="min-h-11 min-w-11 shrink-0 sm:min-h-10 sm:min-w-10"
-              >
-                <Send className="h-4 w-4" />
-                <span className="sr-only">إرسال</span>
-              </Button>
-            </form>
-          </CardContent>
+        <Card className="flex min-h-[60vh] flex-col overflow-hidden lg:col-span-2">
+          <ChatThread
+            conversationId={conversationId}
+            viewerUserId={studentId}
+            peerName={adminName}
+            peerAvatarUrl={adminAvatarUrl}
+            viewerInitial={studentInitial}
+            peerInitial={adminInitial}
+            initialMessages={initialMessages}
+            onSend={onSend}
+            markReadOnMount={markReadOnMount}
+          />
         </Card>
 
         <Card>
@@ -212,9 +84,18 @@ export function MessagesContent({
             </div>
 
             <div>
+              <h4 className="mb-2 font-medium">المرفقات</h4>
+              <p className="text-sm text-muted-foreground">
+                يمكنك إرسال حتى ٥ صور في رسالة واحدة، أو حتى ٥ ملفات (PDF/صوت) — دون خلط الصور
+                مع الملفات في نفس الرسالة.
+              </p>
+            </div>
+
+            <div>
               <h4 className="mb-2 font-medium">ملاحظة</h4>
               <p className="text-sm text-muted-foreground">
-                للاستفسارات العاجلة، يمكنك التواصل عبر واتساب على الرقم المسجل في صفحة الاشتراك.
+                للاستفسارات العاجلة، يمكنك التواصل عبر واتساب على الرقم المسجل في صفحة
+                الاشتراك.
               </p>
             </div>
           </CardContent>

@@ -15,6 +15,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Separator } from "@/components/ui/separator"
 import { APP_METADATA, BRAND, CURRENCY, PROGRAM } from "@/lib/config"
 import { loadSubscribePageData } from "@/lib/server/subscribe-page-data"
+import { getPublicSiteSnapshot } from "@/lib/server/public-site-snapshot"
 
 export const metadata: Metadata = {
   title: "طلب الاشتراك والتواصل",
@@ -27,7 +28,8 @@ function formatPrice(n: number): string {
 }
 
 export default async function SubscribePage() {
-  const { plans, setting, whatsappHref, telegramHref } = await loadSubscribePageData()
+  const [{ plans, setting, whatsappHref, telegramHref }, { teacherDisplayName }] =
+    await Promise.all([loadSubscribePageData(), getPublicSiteSnapshot()])
 
   const planChoices = plans.map((p) => ({ id: p.id, name: p.name }))
 
@@ -39,7 +41,7 @@ export default async function SubscribePage() {
           <Link href="/" className="mb-6 inline-flex flex-col items-center gap-2 transition-opacity hover:opacity-90">
             <BrandMark size={56} />
             <span className="text-sm font-semibold text-primary">{BRAND.taglineAr}</span>
-            <span className="text-xs text-muted-foreground">{BRAND.teacherAr}</span>
+            <span className="text-xs text-muted-foreground">{teacherDisplayName}</span>
           </Link>
           <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/5 px-3 py-1 text-xs font-medium text-primary">
             <Sparkles className="h-3.5 w-3.5" aria-hidden />

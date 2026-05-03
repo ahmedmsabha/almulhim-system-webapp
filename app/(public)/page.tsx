@@ -13,25 +13,45 @@ import {
   Bell,
   Download,
   Shield,
-  Clock,
-  Users,
-  CheckCircle,
   ArrowLeft,
   Smartphone,
 } from 'lucide-react'
-import { sampleLessons } from '@/lib/sample-data'
 import { BRAND } from '@/lib/config'
 import { BrandMark } from '@/components/brand/brand-lockup'
-
-// Get preview lessons for the landing page
-const previewLessons = sampleLessons.filter((lesson) => lesson.is_preview)
+import { getPublicSiteSnapshot } from '@/lib/server/public-site-snapshot'
+import type { VideoLesson } from '@/types'
 
 function formatDuration(seconds: number): string {
   const minutes = Math.floor(seconds / 60)
   return `${minutes} دقيقة`
 }
 
-export default function LandingPage() {
+function formatStatAr(n: number): string {
+  return n.toLocaleString('ar-EG')
+}
+
+function previewThumbnail(lesson: VideoLesson): string | null {
+  if (lesson.thumbnail_url) return lesson.thumbnail_url
+  if (lesson.youtube_id) return `https://img.youtube.com/vi/${lesson.youtube_id}/hqdefault.jpg`
+  return null
+}
+
+function previewWatchHref(lesson: VideoLesson): string {
+  if (lesson.youtube_id) return `https://www.youtube.com/watch?v=${lesson.youtube_id}`
+  return '/register'
+}
+
+export default async function LandingPage() {
+  const {
+    teacherDisplayName,
+    landingStats: {
+      activeSubscribers,
+      publishedLessons,
+      publishedPdfs,
+      freePreviewLessons,
+    },
+    previewLessons,
+  } = await getPublicSiteSnapshot()
   return (
     <>
       {/* Hero Section */}
@@ -42,13 +62,13 @@ export default function LandingPage() {
             <div className="mb-8 flex flex-col items-center gap-3">
               <BrandMark size={88} className="ring-2 ring-primary-foreground/25 shadow-lg" />
               <p className="text-base font-semibold text-primary-foreground/95">{BRAND.taglineAr}</p>
-              <p className="text-sm text-primary-foreground/85">{BRAND.teacherAr}</p>
+              <p className="text-sm text-primary-foreground/85">{teacherDisplayName}</p>
             </div>
             <h1 className="mb-6 text-3xl font-bold leading-tight md:text-5xl text-balance">
               تعلم الفيزياء بأسلوب مبسط ومتميز
             </h1>
             <p className="mb-8 text-lg opacity-90 md:text-xl leading-relaxed text-pretty">
-              منصة تعليمية متكاملة للثانوية العامة والتوجيهي مع {BRAND.teacherAr}. دروس مصورة عالية
+              منصة تعليمية متكاملة للثانوية العامة والتوجيهي مع {teacherDisplayName}. دروس مصورة عالية
               الجودة، ملخصات شاملة، وتمارين محلولة خطوة بخطوة.
             </p>
             <div className="flex flex-col items-center justify-center gap-4 sm:flex-row">
@@ -79,20 +99,20 @@ export default function LandingPage() {
         <div className="container mx-auto px-4">
           <div className="grid grid-cols-2 gap-6 text-center md:grid-cols-4">
             <div>
-              <p className="text-3xl font-bold text-primary">+500</p>
-              <p className="text-sm text-muted-foreground">طالب مشترك</p>
+              <p className="text-3xl font-bold text-primary">{formatStatAr(activeSubscribers)}</p>
+              <p className="text-sm text-muted-foreground">طالب اشتراكه فعّال حالياً</p>
             </div>
             <div>
-              <p className="text-3xl font-bold text-primary">+45</p>
-              <p className="text-sm text-muted-foreground">درس مصور</p>
+              <p className="text-3xl font-bold text-primary">{formatStatAr(publishedLessons)}</p>
+              <p className="text-sm text-muted-foreground">درس مصور منشور</p>
             </div>
             <div>
-              <p className="text-3xl font-bold text-primary">+30</p>
-              <p className="text-sm text-muted-foreground">ملف PDF</p>
+              <p className="text-3xl font-bold text-primary">{formatStatAr(publishedPdfs)}</p>
+              <p className="text-sm text-muted-foreground">ملف PDF منشور</p>
             </div>
             <div>
-              <p className="text-3xl font-bold text-primary">15</p>
-              <p className="text-sm text-muted-foreground">سنة خبرة</p>
+              <p className="text-3xl font-bold text-primary">{formatStatAr(freePreviewLessons)}</p>
+              <p className="text-sm text-muted-foreground">درس معاينة مجاني</p>
             </div>
           </div>
         </div>
@@ -192,45 +212,51 @@ export default function LandingPage() {
             </p>
           </div>
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {previewLessons.map((lesson) => (
-              <Card key={lesson.id} className="overflow-hidden">
-                <div className="relative aspect-video bg-muted">
-                  {lesson.thumbnail_url ? (
-                    <img
-                      src={lesson.thumbnail_url}
-                      alt={lesson.title}
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center">
-                      <Play className="h-12 w-12 text-muted-foreground" />
-                    </div>
-                  )}
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 transition-opacity hover:opacity-100">
-                    <div className="rounded-full bg-white/90 p-4">
-                      <Play className="h-8 w-8 text-primary" />
-                    </div>
+            {previewLessons.map((lesson) => {
+              const thumb = previewThumbnail(lesson)
+              const watchHref = previewWatchHref(lesson)
+              const external = lesson.youtube_id ? true : false
+              return (
+                <Card key={lesson.id} className="overflow-hidden">
+                  <div className="relative aspect-video bg-muted">
+                    {thumb ?
+                      <img src={thumb} alt={lesson.title} className="h-full w-full object-cover" />
+                    : (
+                      <div className="flex h-full w-full items-center justify-center">
+                        <Play className="h-12 w-12 text-muted-foreground" />
+                      </div>
+                    )}
+                    <span className="absolute right-2 top-2 rounded bg-accent px-2 py-1 text-xs font-medium text-accent-foreground">
+                      مجاني
+                    </span>
+                    <span className="absolute bottom-2 left-2 rounded bg-black/70 px-2 py-1 text-xs text-white">
+                      {formatDuration(lesson.duration)}
+                    </span>
                   </div>
-                  <span className="absolute right-2 top-2 rounded bg-accent px-2 py-1 text-xs font-medium text-accent-foreground">
-                    مجاني
-                  </span>
-                  <span className="absolute bottom-2 left-2 rounded bg-black/70 px-2 py-1 text-xs text-white">
-                    {formatDuration(lesson.duration)}
-                  </span>
-                </div>
-                <CardContent className="p-4">
-                  <h3 className="mb-2 font-semibold">{lesson.title}</h3>
-                  <p className="mb-4 text-sm text-muted-foreground line-clamp-2">
-                    {lesson.description}
-                  </p>
-                  <Button className="w-full" variant="outline">
-                    <Play className="h-4 w-4" />
-                    <span>مشاهدة الدرس</span>
-                  </Button>
-                </CardContent>
-              </Card>
-            ))}
+                  <CardContent className="p-4">
+                    <h3 className="mb-2 font-semibold">{lesson.title}</h3>
+                    <p className="mb-4 text-sm text-muted-foreground line-clamp-2">
+                      {lesson.description || 'معاينة من محتوى المنصّة المنشور.'}
+                    </p>
+                    <Button className="w-full" variant="outline" asChild>
+                      <Link
+                        href={watchHref}
+                        {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+                      >
+                        <Play className="h-4 w-4" />
+                        <span>{lesson.youtube_id ? 'مشاهدة على يوتيوب' : 'إنشاء حساب للمتابعة'}</span>
+                      </Link>
+                    </Button>
+                  </CardContent>
+                </Card>
+              )
+            })}
           </div>
+          {previewLessons.length === 0 ?
+            <p className="text-center text-muted-foreground">
+              ستُعرض هنا الدروس المجلّبة كمعاينة عندما ينشر المعلِّم دروساً مجانية من لوحة الإدارة.
+            </p>
+          : null}
           <div className="mt-8 text-center">
             <p className="mb-4 text-muted-foreground">
               هل أعجبك المحتوى؟ اشترك الآن للوصول لجميع الدروس والملفات
@@ -313,8 +339,8 @@ export default function LandingPage() {
               <AccordionItem value="item-3">
                 <AccordionTrigger>كيف أتواصل مع المدرس؟</AccordionTrigger>
                 <AccordionContent>
-                  يمكنك التواصل مع المدرس عبر نظام الرسائل داخل المنصة، أو عبر واتساب
-                  للاستفسارات العاجلة. المدرس متاح للرد من 9 صباحاً حتى 9 مساءً.
+                  يمكنك التواصل عبر نظام الرسائل داخل المنصة بعد تسجيل الدخول، أو عبر روابط التواصل
+                  (واتساب / تيليغرام) في تذييل الموقع أو صفحة طلب الاشتراك عندما تكون مفعّلة من الإدارة.
                 </AccordionContent>
               </AccordionItem>
               <AccordionItem value="item-4">
@@ -344,7 +370,13 @@ export default function LandingPage() {
             جاهز لبدء رحلة التفوق في الفيزياء؟
           </h2>
           <p className="mx-auto mb-8 max-w-xl opacity-90">
-            انضم لأكثر من 500 طالب يحققون نتائج ممتازة مع {BRAND.taglineAr}
+            {activeSubscribers > 0 ?
+              <>
+                يدرس معنا حالياً{' '}
+                <span className="font-semibold">{formatStatAr(activeSubscribers)}</span> طالباً لديهم
+                صلاحية وصول نشطة — انضم إلى {BRAND.taglineAr}
+              </>
+            : `ابدأ مع ${BRAND.taglineAr} واطلب تفعيل اشتراكك للوصول الكامل للمحتوى.`}
           </p>
           <div className="flex flex-col items-center justify-center gap-4 sm:flex-row">
             <Button size="lg" variant="secondary" asChild>

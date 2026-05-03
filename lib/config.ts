@@ -4,6 +4,8 @@ export const STORAGE_BUCKETS = {
   pdfs: 'pdfs',
   thumbnails: 'thumbnails',
   announcements: 'announcements',
+  /** مرفقات الدردشة (خاص — قراءة عبر روابط موقّعة من الخادم). */
+  chatAttachments: 'chat_attachments',
 } as const;
 
 /** Public CDN origin for static assets (optional). */

@@ -6,10 +6,9 @@ import { Card, CardContent } from '@/components/ui/card'
 import { StudentMaterialPdfDetailHeader } from '@/components/student/materials/student-material-pdf-detail-header'
 import { StudentProtectedPdfViewer } from '@/components/student/materials/student-protected-pdf-viewer'
 import { AlertCircle, FileText } from 'lucide-react'
-import { createClient } from '@/lib/supabase/server'
+import { getPdfMaterialById, getPdfWithAccess } from '@/lib/db/queries/pdfs'
+import { ResourceNotFoundError } from '@/lib/db/errors'
 import { requireStudentContentAccess } from '@/lib/server/layout-gates'
-import { getPdfMaterialById, getSubscriberPdfs } from '@/lib/db/queries/pdfs'
-import { materialsWithPlaceholderStatus } from '@/lib/server/student-home-data'
 
 interface MaterialPageProps {
   params: Promise<{ id: string }>
@@ -37,26 +36,26 @@ function formatFileSize(bytes: number): string {
 
 export default async function MaterialPage({ params }: MaterialPageProps) {
   const { id } = await params
-  await requireStudentContentAccess()
-  const supabase = await createClient()
-  const {
-    data: { session },
-  } = await supabase.auth.getSession()
-  if (!session?.access_token) notFound()
+  const { accessToken } = await requireStudentContentAccess()
 
-  const pdfs = await getSubscriberPdfs(session.access_token)
-  const withStatus = materialsWithPlaceholderStatus(pdfs)
-  const material = withStatus.find((m) => m.id === id)
-  if (!material) notFound()
+  let material
+  try {
+    material = await getPdfWithAccess(id, accessToken)
+  } catch (e) {
+    if (e instanceof ResourceNotFoundError) notFound()
+    throw e
+  }
+
+  const displayMaterial = { ...material, download_status: 'not_downloaded' as const }
 
   const isExpired = false
 
   return (
     <div className="space-y-4">
       <StudentMaterialPdfDetailHeader
-        materialId={material.id}
-        title={material.title}
-        subtitle={`${material.page_count} صفحة · ${formatFileSize(material.file_size)}`}
+        materialId={displayMaterial.id}
+        title={displayMaterial.title}
+        subtitle={`${displayMaterial.page_count} صفحة · ${formatFileSize(displayMaterial.file_size)}`}
       />
 
       <div className="grid gap-4 lg:grid-cols-4">
@@ -82,8 +81,8 @@ export default async function MaterialPage({ params }: MaterialPageProps) {
                     </CardContent>
                   </Card>
                 </div>
-              ) : material.file_url ? (
-                <StudentProtectedPdfViewer materialId={material.id} title={material.title} />
+              ) : displayMaterial.file_url ? (
+                <StudentProtectedPdfViewer materialId={displayMaterial.id} title={displayMaterial.title} />
               ) : (
                 <div className="flex h-[60vh] w-full flex-col items-center justify-center rounded-lg bg-muted/50">
                   <FileText className="mb-4 h-16 w-16 text-muted-foreground/50" />
@@ -101,15 +100,15 @@ export default async function MaterialPage({ params }: MaterialPageProps) {
               <dl className="space-y-2 text-sm">
                 <div className="flex justify-between gap-2">
                   <dt className="text-muted-foreground">التصنيف</dt>
-                  <dd className="text-left font-medium">{material.category}</dd>
+                  <dd className="text-left font-medium">{displayMaterial.category}</dd>
                 </div>
                 <div className="flex justify-between gap-2">
                   <dt className="text-muted-foreground">الصفحات</dt>
-                  <dd className="tabular-nums font-medium">{material.page_count}</dd>
+                  <dd className="tabular-nums font-medium">{displayMaterial.page_count}</dd>
                 </div>
                 <div className="flex justify-between gap-2">
                   <dt className="text-muted-foreground">الحجم</dt>
-                  <dd className="tabular-nums font-medium">{formatFileSize(material.file_size)}</dd>
+                  <dd className="tabular-nums font-medium">{formatFileSize(displayMaterial.file_size)}</dd>
                 </div>
               </dl>
               <p className="text-xs leading-relaxed text-muted-foreground">

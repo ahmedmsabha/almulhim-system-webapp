@@ -1,8 +1,6 @@
 import type { Metadata } from 'next'
-import { redirect } from 'next/navigation'
 
 import { MessagesContent } from './messages-content'
-import { createClient } from '@/lib/supabase/server'
 import { requireStudentContentAccess } from '@/lib/server/layout-gates'
 import {
   getDefaultAdminContact,
@@ -16,15 +14,10 @@ export const metadata: Metadata = {
 }
 
 export default async function MessagesPage() {
-  const { profile } = await requireStudentContentAccess()
-  const supabase = await createClient()
-  const {
-    data: { session },
-  } = await supabase.auth.getSession()
-  if (!session?.access_token) redirect('/login')
+  const { profile, accessToken } = await requireStudentContentAccess()
 
-  const conv = await getOrCreateConversation(profile.id, session.access_token)
-  const initialMessages = await getMessages(conv.id, session.access_token)
+  const conv = await getOrCreateConversation(profile.id, accessToken)
+  const initialMessages = await getMessages(conv.id, accessToken)
   const admin = await getDefaultAdminContact()
 
   return (

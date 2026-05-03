@@ -50,15 +50,20 @@ export async function getCurrentProfile(): Promise<Profile | null> {
     data: { session },
   } = await supabase.auth.getSession()
 
-  if (!session?.access_token) {
-    return null
+  if (session?.access_token) {
+    const rows = await withUserDb(session.access_token, async (tx) =>
+      tx.select().from(profiles).where(eq(profiles.id, user.id)).limit(1)
+    )
+    const row = rows[0]
+    return row ? mapDbProfile(row) : null
   }
 
-  const rows = await withUserDb(session.access_token, async (tx) =>
-    tx.select().from(profiles).where(eq(profiles.id, user.id)).limit(1)
-  )
-
-  const row = rows[0]
+  const fallback = await adminDb
+    .select()
+    .from(profiles)
+    .where(eq(profiles.id, user.id))
+    .limit(1)
+  const row = fallback[0]
   return row ? mapDbProfile(row) : null
 }
 

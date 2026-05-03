@@ -1,7 +1,9 @@
+import { sql } from "drizzle-orm"
 import {
   boolean,
   date,
   integer,
+  jsonb,
   numeric,
   pgTable,
   text,
@@ -157,6 +159,19 @@ export const messages = pgTable("messages", {
     .references(() => profiles.id, { onDelete: "cascade" }),
   sender_role: text("sender_role").notNull(),
   content: text("content").notNull(),
+  /** مرفقات الرسالة: صور (حتى 5) أو ملفات pdf/صوت (حتى 5) — لا يُخلَط النوعان في رسالة واحدة. */
+  attachments: jsonb("attachments")
+    .$type<
+      {
+        kind: "image" | "pdf" | "audio"
+        storage_path: string
+        file_name: string
+        mime_type: string
+        size_bytes?: number
+      }[]
+    >()
+    .notNull()
+    .default(sql`'[]'::jsonb`),
   is_read: boolean("is_read").notNull().default(false),
   created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 })

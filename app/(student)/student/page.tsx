@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { redirect } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
@@ -18,9 +17,9 @@ import {
   TrendingUp,
   Sparkles,
 } from 'lucide-react'
-import { createClient } from '@/lib/supabase/server'
 import { requireStudentLayoutContext } from '@/lib/server/layout-gates'
 import { loadStudentHomeData } from '@/lib/server/student-home-data'
+import { getMergedTeacherContact } from '@/lib/db/queries/site-settings'
 import { BRAND } from '@/lib/config'
 
 export const metadata: Metadata = {
@@ -45,7 +44,11 @@ function getDaysRemaining(endDate: string): number {
 }
 
 export default async function StudentDashboard() {
-  const { profile, subscription, subscriptionStatus } = await requireStudentLayoutContext()
+  const [ctx, contact] = await Promise.all([
+    requireStudentLayoutContext(),
+    getMergedTeacherContact(),
+  ])
+  const { profile, subscription, subscriptionStatus, accessToken } = ctx
 
   if (subscriptionStatus === 'none') {
     const studentFirstName = profile.full_name.split(' ')[0]
@@ -62,7 +65,12 @@ export default async function StudentDashboard() {
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col items-center gap-6 pb-8">
-            <TeacherContactButtons layout="stack" className="w-full max-w-xs justify-stretch" />
+            <TeacherContactButtons
+              layout="stack"
+              className="w-full max-w-xs justify-stretch"
+              telegramUrl={contact.telegramUrl}
+              whatsappUrl={contact.whatsappUrl}
+            />
             <p className="text-center text-sm text-muted-foreground">
               بعد تفعيل الاشتراك ستظهر لك لوحة التحكم والمحتوى تلقائياً.
             </p>
@@ -72,13 +80,7 @@ export default async function StudentDashboard() {
     )
   }
 
-  const supabase = await createClient()
-  const {
-    data: { session },
-  } = await supabase.auth.getSession()
-  if (!session?.access_token) redirect('/login')
-
-  const home = await loadStudentHomeData(session.access_token, subscription)
+  const home = await loadStudentHomeData(accessToken, subscription)
   const {
     lessonsWithProgress,
     materials,
@@ -118,7 +120,11 @@ export default async function StudentDashboard() {
                 تواصل مع الأستاذ لتجديد الاشتراك واستعادة الوصول الكامل للمحتوى.
               </p>
             </div>
-            <TeacherContactButtons className="shrink-0 sm:justify-end" />
+            <TeacherContactButtons
+              className="shrink-0 sm:justify-end"
+              telegramUrl={contact.telegramUrl}
+              whatsappUrl={contact.whatsappUrl}
+            />
           </CardContent>
         </Card>
       )}

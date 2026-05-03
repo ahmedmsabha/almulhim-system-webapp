@@ -114,12 +114,25 @@ export interface PDF {
 /** طالب لوحة الإدارة — نفس الشخصية مع اشتراك اختياري */
 export type Student = Profile & { subscription?: Subscription }
 
+export type ChatAttachmentKind = "image" | "pdf" | "audio"
+
+export interface MessageAttachment {
+  kind: ChatAttachmentKind
+  storage_path: string
+  file_name: string
+  mime_type: string
+  size_bytes?: number
+  /** يُملأ من الخادم عند الجلب أو بعد التوقيع — مؤقت. */
+  signed_url?: string
+}
+
 export interface Message {
   id: string
   conversation_id: string
   sender_id: string
   sender_role: "student" | "admin"
   content: string
+  attachments: MessageAttachment[]
   is_read: boolean
   created_at: string
 }

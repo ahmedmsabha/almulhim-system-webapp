@@ -5,7 +5,6 @@ import { AnnouncementCard } from '@/components/student/announcements/announcemen
 import { EmptyState } from '@/components/shared/feedback/empty-state'
 import { Bell } from 'lucide-react'
 import { getMonthStickyLabel } from '@/lib/format-relative-ar'
-import { createClient } from '@/lib/supabase/server'
 import { getAnnouncements } from '@/lib/db/queries/announcements'
 import { requireStudentContentAccess } from '@/lib/server/layout-gates'
 
@@ -20,14 +19,9 @@ function monthStamp(isoDate: string): string {
 }
 
 export default async function AnnouncementsPage() {
-  await requireStudentContentAccess()
-  const supabase = await createClient()
-  const {
-    data: { session },
-  } = await supabase.auth.getSession()
-  if (!session?.access_token) redirect('/login')
+  const { accessToken } = await requireStudentContentAccess()
 
-  const list = await getAnnouncements(session.access_token, { is_published: true })
+  const list = await getAnnouncements(accessToken, { is_published: true })
   const sortedAnnouncements = [...list].sort((a, b) => {
     if (a.is_pinned && !b.is_pinned) return -1
     if (!a.is_pinned && b.is_pinned) return 1

@@ -1,5 +1,5 @@
 import "server-only"
-import { and, asc, eq } from "drizzle-orm"
+import { and, asc, eq, inArray, ne } from "drizzle-orm"
 import { jwtDecode, type JwtPayload } from "jwt-decode"
 
 import { adminDb, withUserDb } from "@/lib/db/client"
@@ -10,9 +10,9 @@ import {
   SubscriptionExpiredError,
   UnauthorizedError,
 } from "@/lib/db/errors"
-import type { VideoLesson, WatchProgress } from "@/types"
+import type { LessonWithProgress, VideoLesson, WatchProgress } from "@/types"
 
-function rowToVideoLesson(row: typeof videoLessons.$inferSelect): VideoLesson {
+export function rowToVideoLesson(row: typeof videoLessons.$inferSelect): VideoLesson {
   return {
     id: row.id,
     title: row.title,
@@ -27,6 +27,18 @@ function rowToVideoLesson(row: typeof videoLessons.$inferSelect): VideoLesson {
     order: row.order,
     created_at: row.created_at.toISOString(),
     updated_at: row.updated_at.toISOString(),
+  }
+}
+
+export function wpRow(row: typeof watchProgress.$inferSelect): WatchProgress {
+  return {
+    id: row.id,
+    student_id: row.student_id,
+    lesson_id: row.lesson_id,
+    progress: row.progress,
+    last_position: row.last_position,
+    completed: row.completed,
+    last_watched_at: row.last_watched_at.toISOString(),
   }
 }
 
@@ -141,6 +153,135 @@ export async function getSubscriberVideos(accessToken: string): Promise<VideoLes
   })
 }
 
+/** One DB session for list + progress (avoids two `withUserDb` round-trips). */
+export async function getSubscriberVideosWithProgress(accessToken: string): Promise<{
+  lessons: VideoLesson[]
+  progress: WatchProgress[]
+}> {
+  const subClaim = jwtDecode<JwtPayload>(accessToken).sub
+  if (!subClaim) {
+    throw new UnauthorizedError()
+  }
+
+  return withUserDb(accessToken, async (tx) => {
+    const active = await subscriptionIsActive(tx, subClaim)
+
+    const lessonRows =
+      active ?
+        await tx
+          .select()
+          .from(videoLessons)
+          .where(eq(videoLessons.is_published, true))
+          .orderBy(asc(videoLessons.order), asc(videoLessons.created_at))
+      : await tx
+          .select()
+          .from(videoLessons)
+          .where(and(eq(videoLessons.is_published, true), eq(videoLessons.is_preview, true)))
+          .orderBy(asc(videoLessons.order), asc(videoLessons.created_at))
+
+    const progressRows = await tx
+      .select()
+      .from(watchProgress)
+      .where(eq(watchProgress.student_id, subClaim))
+
+    return {
+      lessons: lessonRows.map(rowToVideoLesson),
+      progress: progressRows.map(wpRow),
+    }
+  })
+}
+
+/** Lesson detail without loading the full catalog (critical on slow links). */
+export async function getSubscriberLessonDetailPage(
+  accessToken: string,
+  lessonId: string
+): Promise<{ lesson: LessonWithProgress; related: LessonWithProgress[] } | null> {
+  const subClaim = jwtDecode<JwtPayload>(accessToken).sub
+  if (!subClaim) {
+    throw new UnauthorizedError()
+  }
+
+  return withUserDb(accessToken, async (tx) => {
+    const active = await subscriptionIsActive(tx, subClaim)
+
+    const [lessonRow] = await tx
+      .select()
+      .from(videoLessons)
+      .where(and(eq(videoLessons.id, lessonId), eq(videoLessons.is_published, true)))
+      .limit(1)
+
+    if (!lessonRow) {
+      return null
+    }
+
+    if (!lessonRow.is_preview && !active) {
+      return null
+    }
+
+    const [wpMain] = await tx
+      .select()
+      .from(watchProgress)
+      .where(and(eq(watchProgress.student_id, subClaim), eq(watchProgress.lesson_id, lessonId)))
+      .limit(1)
+
+    const relatedPredicates = [
+      eq(videoLessons.is_published, true),
+      eq(videoLessons.unit, lessonRow.unit),
+      ne(videoLessons.id, lessonId),
+    ] as const
+
+    const relatedRows =
+      active ?
+        await tx
+          .select()
+          .from(videoLessons)
+          .where(and(...relatedPredicates))
+          .orderBy(asc(videoLessons.order), asc(videoLessons.created_at))
+          .limit(8)
+      : await tx
+          .select()
+          .from(videoLessons)
+          .where(
+            and(
+              ...relatedPredicates,
+              eq(videoLessons.is_preview, true)
+            )
+          )
+          .orderBy(asc(videoLessons.order), asc(videoLessons.created_at))
+          .limit(8)
+
+    const relatedIds = relatedRows.map((r) => r.id)
+    const relatedProgress =
+      relatedIds.length === 0 ?
+        []
+      : await tx
+          .select()
+          .from(watchProgress)
+          .where(
+            and(
+              eq(watchProgress.student_id, subClaim),
+              inArray(watchProgress.lesson_id, relatedIds)
+            )
+          )
+
+    const byLesson = new Map(relatedProgress.map((p) => [p.lesson_id, p]))
+
+    const lesson: LessonWithProgress = {
+      ...rowToVideoLesson(lessonRow),
+      watch_progress: wpMain ? wpRow(wpMain) : undefined,
+      download_status: "not_downloaded",
+    }
+
+    const related: LessonWithProgress[] = relatedRows.map((r) => ({
+      ...rowToVideoLesson(r),
+      watch_progress: byLesson.get(r.id) ? wpRow(byLesson.get(r.id)!) : undefined,
+      download_status: "not_downloaded",
+    }))
+
+    return { lesson, related }
+  })
+}
+
 export async function upsertWatchProgress(
   userId: string,
   lessonId: string,
@@ -177,18 +318,6 @@ export async function upsertWatchProgress(
         },
       })
   })
-}
-
-function wpRow(row: typeof watchProgress.$inferSelect): WatchProgress {
-  return {
-    id: row.id,
-    student_id: row.student_id,
-    lesson_id: row.lesson_id,
-    progress: row.progress,
-    last_position: row.last_position,
-    completed: row.completed,
-    last_watched_at: row.last_watched_at.toISOString(),
-  }
 }
 
 /** Watch progress for the JWT subject (student). Optional filter by lesson. */

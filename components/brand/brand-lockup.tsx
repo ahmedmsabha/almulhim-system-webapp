@@ -38,12 +38,16 @@ export function BrandLockup({
   href = "/",
   variant = "default",
   className,
+  teacherDisplayName,
 }: {
   href?: string
   variant?: "default" | "compact"
   className?: string
+  /** إن وُجد يُحدَّد على الخادم من ملف شخصيّ المشرف في القاعدة */
+  teacherDisplayName?: string
 }) {
   const compact = variant === "compact"
+  const teacherLine = teacherDisplayName ?? BRAND.teacherAr
   return (
     <Link
       href={href}
@@ -56,7 +60,7 @@ export function BrandLockup({
         </span>
         <span className="truncate text-xs text-muted-foreground">{BRAND.taglineAr}</span>
         {!compact ?
-          <span className="mt-0.5 text-xs font-medium text-foreground/85">{BRAND.teacherAr}</span>
+          <span className="mt-0.5 text-xs font-medium text-foreground/85">{teacherLine}</span>
         : null}
       </div>
     </Link>

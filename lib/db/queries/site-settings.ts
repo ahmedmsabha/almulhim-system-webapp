@@ -1,7 +1,9 @@
 import "server-only"
 
+import { cache } from "react"
 import { eq } from "drizzle-orm"
 
+import { BRAND, TEACHER_CONTACT } from "@/lib/config"
 import { adminDb } from "@/lib/db/client"
 import { appSetting } from "@/lib/db/schema"
 
@@ -34,7 +36,7 @@ function parseGradesJson(raw: string | null | undefined): string[] {
   }
 }
 
-export async function getAppSetting(): Promise<AppSettingDTO> {
+async function fetchAppSetting(): Promise<AppSettingDTO> {
   try {
     const rows = await adminDb
       .select()
@@ -62,6 +64,31 @@ export async function getAppSetting(): Promise<AppSettingDTO> {
       updated_at: "",
     }
   }
+}
+
+/** Deduped reads per server request (layouts + nested pages). */
+export const getAppSetting = cache(fetchAppSetting)
+
+export type MergedTeacherContact = {
+  telegramUrl: string | undefined
+  whatsappUrl: string | undefined
+}
+
+/** روابط التواصل المحفوظة في لوحة الإدارة، مع احتياطي من متغيرات البيئة. */
+export const getMergedTeacherContact = cache(
+  async (): Promise<MergedTeacherContact> => {
+    const s = await getAppSetting()
+    return {
+      telegramUrl: s.telegram_url || TEACHER_CONTACT.telegramUrl,
+      whatsappUrl: s.whatsapp_url || TEACHER_CONTACT.whatsappUrl,
+    }
+  }
+)
+
+/** الاسم المعروض للمعلِّم: الاسم الكامل للمشرف في القاعدة، ثم الاسم الافتراضي في الإعدادات. */
+export function resolveTeacherDisplayName(adminFullName: string | null | undefined): string {
+  const t = adminFullName?.trim()
+  return t && t.length > 0 ? t : BRAND.teacherAr
 }
 
 export async function upsertAppSetting(input: {

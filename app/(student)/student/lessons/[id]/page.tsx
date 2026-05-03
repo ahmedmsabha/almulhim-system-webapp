@@ -2,10 +2,8 @@ import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 
 import { StudentLessonDetail } from '@/components/student/lessons/student-lesson-detail'
-import { createClient } from '@/lib/supabase/server'
 import { requireStudentContentAccess } from '@/lib/server/layout-gates'
-import { getSubscriberVideos, watchProgressForUser, getVideoById } from '@/lib/db/queries/videos'
-import { mergeLessonsWithProgress } from '@/lib/server/student-home-data'
+import { getSubscriberLessonDetailPage, getVideoById } from '@/lib/db/queries/videos'
 
 interface LessonPageProps {
   params: Promise<{ id: string }>
@@ -27,29 +25,17 @@ export async function generateMetadata({ params }: LessonPageProps): Promise<Met
 
 export default async function LessonPage({ params }: LessonPageProps) {
   const { id } = await params
-  await requireStudentContentAccess()
-  const supabase = await createClient()
-  const {
-    data: { session },
-  } = await supabase.auth.getSession()
-  if (!session?.access_token) notFound()
+  const { accessToken } = await requireStudentContentAccess()
 
-  const [lessons, progress] = await Promise.all([
-    getSubscriberVideos(session.access_token),
-    watchProgressForUser(session.access_token),
-  ])
-  const merged = mergeLessonsWithProgress(lessons, progress)
-  const lesson = merged.find((l) => l.id === id)
-  if (!lesson) notFound()
+  const detail = await getSubscriberLessonDetailPage(accessToken, id)
+  if (!detail) notFound()
 
-  const relatedLessons = merged
-    .filter((l) => l.unit === lesson.unit && l.id !== lesson.id)
-    .slice(0, 8)
+  const { lesson, related } = detail
 
   return (
     <StudentLessonDetail
       lesson={lesson}
-      relatedLessons={relatedLessons}
+      relatedLessons={related}
       isSubscriptionExpired={false}
     />
   )

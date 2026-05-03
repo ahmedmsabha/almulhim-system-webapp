@@ -12,7 +12,7 @@ import {
 } from "@/lib/db/errors"
 import type { PDFMaterial } from "@/types"
 
-function rowToPdf(row: typeof pdfMaterials.$inferSelect): PDFMaterial {
+export function rowToPdf(row: typeof pdfMaterials.$inferSelect): PDFMaterial {
   return {
     id: row.id,
     title: row.title,

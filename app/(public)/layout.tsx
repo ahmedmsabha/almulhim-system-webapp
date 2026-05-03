@@ -3,12 +3,14 @@ import { Button } from '@/components/ui/button'
 import { Menu } from 'lucide-react'
 import { BrandLockup } from '@/components/brand/brand-lockup'
 import { BRAND } from '@/lib/config'
+import type { MergedTeacherContact } from '@/lib/db/queries/site-settings'
+import { getPublicSiteSnapshot } from '@/lib/server/public-site-snapshot'
 
-function Header() {
+function Header({ teacherDisplayName }: { teacherDisplayName: string }) {
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container mx-auto flex h-16 items-center justify-between gap-3 px-4">
-        <BrandLockup />
+        <BrandLockup teacherDisplayName={teacherDisplayName} />
 
         {/* Desktop Navigation */}
         <nav className="hidden items-center gap-6 md:flex">
@@ -89,15 +91,26 @@ function Header() {
   )
 }
 
-function Footer() {
+function Footer({
+  teacherDisplayName,
+  teacherEmail,
+  contact,
+}: {
+  teacherDisplayName: string
+  teacherEmail: string | null
+  contact: MergedTeacherContact
+}) {
+  const hasContact =
+    Boolean(contact.telegramUrl) || Boolean(contact.whatsappUrl) || Boolean(teacherEmail)
+
   return (
     <footer className="border-t bg-muted/30">
       <div className="container mx-auto px-4 py-12">
         <div className="grid gap-8 md:grid-cols-3">
           <div>
-            <BrandLockup variant="compact" />
+            <BrandLockup variant="compact" teacherDisplayName={teacherDisplayName} />
             <p className="mt-4 text-sm text-muted-foreground leading-relaxed">
-              {BRAND.taglineAr} — منصة تعليمية للمرحلة الثانوية والتوجيهي مع {BRAND.teacherAr}. شرح
+              {BRAND.taglineAr} — منصة تعليمية للمرحلة الثانوية والتوجيهي مع {teacherDisplayName}. شرح
               مبسّط وتمارين محلولة وامتحانات تجريبية.
             </p>
           </div>
@@ -129,9 +142,44 @@ function Footer() {
           <div>
             <h3 className="mb-4 font-semibold">تواصل معنا</h3>
             <ul className="space-y-2 text-sm text-muted-foreground">
-              <li>واتساب: 01012345678</li>
-              <li>البريد: teacher@physics.com</li>
-              <li>متاح من 9 صباحاً حتى 9 مساءً</li>
+              {contact.whatsappUrl ?
+                <li>
+                  <a
+                    href={contact.whatsappUrl}
+                    className="text-primary hover:underline"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    واتساب
+                  </a>
+                </li>
+              : null}
+              {contact.telegramUrl ?
+                <li>
+                  <a
+                    href={contact.telegramUrl}
+                    className="text-primary hover:underline"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    تيليغرام
+                  </a>
+                </li>
+              : null}
+              {teacherEmail ?
+                <li>
+                  <a href={`mailto:${teacherEmail}`} className="text-primary hover:underline">
+                    البريد: {teacherEmail}
+                  </a>
+                </li>
+              : null}
+              {!hasContact ?
+                <li>
+                  <Link href="/subscribe" className="text-primary hover:underline">
+                    تواصل مع المعلِّم عبر صفحة طلب الاشتراك أو من داخل المنصة بعد التسجيل
+                  </Link>
+                </li>
+              : null}
             </ul>
           </div>
         </div>
@@ -145,16 +193,22 @@ function Footer() {
   )
 }
 
-export default function PublicLayout({
+export default async function PublicLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
+  const snapshot = await getPublicSiteSnapshot()
+
   return (
     <div className="flex min-h-screen flex-col">
-      <Header />
+      <Header teacherDisplayName={snapshot.teacherDisplayName} />
       <main className="flex-1">{children}</main>
-      <Footer />
+      <Footer
+        teacherDisplayName={snapshot.teacherDisplayName}
+        teacherEmail={snapshot.teacherEmail}
+        contact={snapshot.contact}
+      />
     </div>
   )
 }

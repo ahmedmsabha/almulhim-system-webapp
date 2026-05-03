@@ -11,11 +11,17 @@ import { cn } from '@/lib/utils'
 export function TeacherContactButtons({
   className,
   layout = 'row',
+  telegramUrl: telegramUrlProp,
+  whatsappUrl: whatsappUrlProp,
 }: {
   className?: string
   layout?: 'row' | 'stack'
+  /** من الخادم: إعدادات الموقع ثم متغيرات البيئة كاحتياطي */
+  telegramUrl?: string
+  whatsappUrl?: string
 }) {
-  const { telegramUrl, whatsappUrl } = TEACHER_CONTACT
+  const telegramUrl = telegramUrlProp ?? TEACHER_CONTACT.telegramUrl
+  const whatsappUrl = whatsappUrlProp ?? TEACHER_CONTACT.whatsappUrl
 
   return (
     <div

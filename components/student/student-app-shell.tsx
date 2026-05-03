@@ -101,6 +101,7 @@ export function StudentAppShell({
                     <Link
                       key={item.href}
                       href={item.href}
+                      prefetch
                       className={cn(
                         'focus-ring flex min-h-11 shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors sm:min-h-9',
                         isActive
@@ -161,6 +162,7 @@ export function StudentAppShell({
                             <Link
                               key={item.href}
                               href={item.href}
+                              prefetch
                               className={cn(
                                 'focus-ring flex touch-target items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium transition-colors',
                                 isActive
@@ -183,6 +185,7 @@ export function StudentAppShell({
                       <div className="space-y-1">
                         <Link
                           href="/student/profile"
+                          prefetch
                           className="focus-ring flex touch-target items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                         >
                           <User className="size-5 shrink-0" />
@@ -231,7 +234,7 @@ export function StudentAppShell({
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem asChild className="focus:bg-accent">
-                    <Link href="/student/profile" className="cursor-pointer gap-2.5">
+                    <Link href="/student/profile" className="cursor-pointer gap-2.5" prefetch>
                       <User className="size-4" />
                       <span>الملف الشخصي</span>
                     </Link>

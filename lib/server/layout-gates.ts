@@ -1,6 +1,7 @@
 import "server-only"
 
 import { redirect } from "next/navigation"
+import { cache } from "react"
 
 import { getCurrentProfile } from "@/lib/supabase/auth"
 import { ensureProfileRow } from "@/lib/supabase/ensure-profile"
@@ -25,9 +26,11 @@ export type StudentLayoutContext = {
   profile: Profile
   subscription: Subscription | null
   subscriptionStatus: StudentSubscriptionUiStatus
+  /** JWT for Drizzle `withUserDb` — same request as layout, no second `getSession`. */
+  accessToken: string
 }
 
-export async function requireStudentLayoutContext(): Promise<StudentLayoutContext> {
+const loadStudentLayoutContext = cache(async (): Promise<StudentLayoutContext> => {
   const supabase = await createClient()
   const {
     data: { user },
@@ -42,17 +45,22 @@ export async function requireStudentLayoutContext(): Promise<StudentLayoutContex
   const {
     data: { session },
   } = await supabase.auth.getSession()
+  const accessToken = session?.access_token
+  if (!accessToken) redirect("/login")
+
   let subscription: Subscription | null = null
-  if (session?.access_token) {
-    try {
-      subscription = await getLatestSubscriptionForStudent(session.access_token)
-    } catch {
-      subscription = null
-    }
+  try {
+    subscription = await getLatestSubscriptionForStudent(accessToken)
+  } catch {
+    subscription = null
   }
 
   const subscriptionStatus = studentSubscriptionUiStatus(subscription)
-  return { profile, subscription, subscriptionStatus }
+  return { profile, subscription, subscriptionStatus, accessToken }
+})
+
+export async function requireStudentLayoutContext(): Promise<StudentLayoutContext> {
+  return loadStudentLayoutContext()
 }
 
 /** صفحات الدروس والملفات وغيرها — يقتصر الوصول على اشتراك فعّال (يشمل «ينتهي قريباً»). */
@@ -64,7 +72,7 @@ export async function requireStudentContentAccess(): Promise<StudentLayoutContex
   return ctx
 }
 
-export async function requireAdminLayoutContext(): Promise<{ profile: Profile }> {
+const loadAdminLayoutContext = cache(async (): Promise<{ profile: Profile }> => {
   const supabase = await createClient()
   const {
     data: { user },
@@ -77,4 +85,8 @@ export async function requireAdminLayoutContext(): Promise<{ profile: Profile }>
   if (profile.role !== "admin") redirect("/student")
 
   return { profile }
+})
+
+export async function requireAdminLayoutContext(): Promise<{ profile: Profile }> {
+  return loadAdminLayoutContext()
 }

@@ -5,12 +5,15 @@ import { RegisterForm } from './register-form'
 import { BrandMark } from '@/components/brand/brand-lockup'
 import { BRAND } from '@/lib/config'
 
+import { getPublicSiteSnapshot } from '@/lib/server/public-site-snapshot'
+
 export const metadata: Metadata = {
   title: 'إنشاء حساب',
   description: `إنشاء حساب طالب جديد على ${BRAND.taglineAr}`,
 }
 
-export default function RegisterPage() {
+export default async function RegisterPage() {
+  const { teacherDisplayName } = await getPublicSiteSnapshot()
   return (
     <div className="container mx-auto flex min-h-[calc(100vh-12rem)] items-center justify-center px-4 py-12">
       <div className="w-full max-w-md">
@@ -18,7 +21,7 @@ export default function RegisterPage() {
           <Link href="/" className="mb-4 inline-flex flex-col items-center gap-2">
             <BrandMark size={56} />
             <span className="text-sm font-semibold text-primary">{BRAND.taglineAr}</span>
-            <span className="text-xs text-muted-foreground">{BRAND.teacherAr}</span>
+            <span className="text-xs text-muted-foreground">{teacherDisplayName}</span>
           </Link>
           <h1 className="mb-2 text-2xl font-bold">إنشاء حساب</h1>
           <p className="text-muted-foreground">

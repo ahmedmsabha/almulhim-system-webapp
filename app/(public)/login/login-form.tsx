@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -15,7 +14,6 @@ import { syncStudentDeviceBinding } from '@/actions/device-binding'
 import { getOrCreateDeviceToken } from '@/lib/client/device-token-storage'
 
 export function LoginForm() {
-  const router = useRouter()
   const [isLoading, setIsLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [formData, setFormData] = useState({
@@ -27,6 +25,7 @@ export function LoginForm() {
     e.preventDefault()
     setIsLoading(true)
 
+    let leavePage = false
     try {
       const supabase = createClient()
       const { error } = await supabase.auth.signInWithPassword({
@@ -55,12 +54,12 @@ export function LoginForm() {
       }
 
       toast.success('تم تسجيل الدخول بنجاح')
-      router.refresh()
-      router.push(dest.data)
+      leavePage = true
+      window.location.assign(dest.data)
     } catch {
       toast.error('فشل تسجيل الدخول. تأكد من البريد وكلمة المرور.')
     } finally {
-      setIsLoading(false)
+      if (!leavePage) setIsLoading(false)
     }
   }
 

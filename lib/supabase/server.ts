@@ -1,10 +1,10 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { cache } from 'react'
 
 import { env } from '@/lib/env'
 
-// Server client for Server Components and Route Handlers
-export async function createClient() {
+async function createServerSupabaseClient() {
   const cookieStore = await cookies()
 
   return createServerClient(
@@ -31,4 +31,5 @@ export async function createClient() {
   )
 }
 
-// TODO: Session refresh runs in proxy.ts (see project root).
+/** One Supabase client per request; avoids duplicate cookie reads and client setup in nested layouts/pages. */
+export const createClient = cache(createServerSupabaseClient)
