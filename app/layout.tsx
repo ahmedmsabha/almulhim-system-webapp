@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next'
 import { IBM_Plex_Sans_Arabic, Geist_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import { Toaster } from 'sonner'
+import { APPLE_SPLASH_LINKS } from '@/lib/apple-splash-links.generated'
 import { APP_METADATA, BRAND } from '@/lib/config'
 import { InstallPrompt } from '@/components/InstallPrompt'
 import { IOSInstallBanner } from '@/components/IOSInstallBanner'
@@ -42,10 +43,10 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: [
-      { url: '/icons/icon-192.png', type: 'image/png', sizes: '192x192' },
-      { url: '/icons/icon-512.png', type: 'image/png', sizes: '512x512' },
+      { url: '/mulhim-icon.png', type: 'image/png', sizes: '192x192' },
+      { url: '/mulhim-icon.png', type: 'image/png', sizes: '512x512' },
     ],
-    apple: '/icons/icon-192.png',
+    apple: '/mulhim-icon.png',
   },
 }
 
@@ -67,8 +68,16 @@ export default function RootLayout({
       <head>
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-        <link rel="apple-touch-icon" href="/icons/icon-192.png" />
-        <link rel="apple-touch-startup-image" href="/icons/splash.png" />
+        <link rel="apple-touch-icon" href="/mulhim-icon.png" />
+        {APPLE_SPLASH_LINKS.map((entry) => (
+          <link
+            key={entry.href}
+            rel="apple-touch-startup-image"
+            href={entry.href}
+            media={entry.media}
+          />
+        ))}
+        <link rel="apple-touch-startup-image" href="/splash/iphone-1290x2796.png" />
       </head>
       <body className={`${ibmPlexArabic.variable} ${geistMono.variable} font-sans antialiased min-h-screen`}>
         <InstallPrompt />

@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "postinstall": "node scripts/copy-pdf-worker.mjs",
+    "generate:splash": "node scripts/generate-pwa-splash.mjs",
     "preview": "npm run build && npm run start",
     "dev": "next dev",
     "build": "next build --webpack",
@@ -81,12 +82,14 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@napi-rs/canvas": "^0.1.100",
     "@tailwindcss/postcss": "^4.2.0",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "drizzle-kit": "^0.31.10",
     "postcss": "^8.5.10",
+    "sharp": "^0.34.5",
     "supabase": "^2.98.0",
     "supabase-cli": "^0.0.21",
     "tailwindcss": "^4.2.0",

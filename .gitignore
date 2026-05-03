@@ -11,6 +11,9 @@ next.user-config.*
 .env*.local
 
 # Common ignores
+# خطوط تُحمَّل عند تشغيل npm run generate:splash
+scripts/fonts/*.ttf
+
 node_modules
 .next/
 .DS_Store

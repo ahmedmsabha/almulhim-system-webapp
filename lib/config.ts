@@ -17,6 +17,8 @@ export const CDN_BASE_URL =
 export const BRAND = {
   nameAr: 'المُلهم',
   taglineAr: 'المُلهم في الفيزياء',
+  /** يُستخدم في شاشة الإقلاع والهوية البصرية مع الشعار */
+  splashTaglineAr: 'اللهم قوة',
   teacherAr: 'أ. علي عبد الكريم جودة',
   /** مسار الأيقونة المولَّدة للعلامة (PNG في public). */
   iconPath: '/mulhim-icon.png' as const,
