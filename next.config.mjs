@@ -69,6 +69,38 @@ const withPWA = withPWAInit({
         method: 'GET',
       },
       /**
+       * الصفحة الرئيسية وطلب الاشتراك والدخول: كانت قواعد `pages` / `pages-rsc` تخزّن StaleWhileRevalidate
+       * حتى أسبيع — يظهر اسم المعلِّم وأرقام قديمة رغم تحديث القاعدة. لا نخزّن هذه المسارات في SW.
+       */
+      {
+        urlPattern: ({ request, url: { pathname }, sameOrigin }) =>
+          request.method === 'GET' &&
+          sameOrigin &&
+          !pathname.startsWith('/api/') &&
+          (pathname === '/' ||
+            pathname.startsWith('/subscribe') ||
+            pathname.startsWith('/login') ||
+            pathname.startsWith('/register')),
+        handler: 'NetworkOnly',
+        method: 'GET',
+      },
+      /** لوحة الطالب: شبكة أولاً وكاش قصير فقط لتفادي عرض اشتراك/تواصل قديم من SW */
+      {
+        urlPattern: ({ request, url: { pathname }, sameOrigin }) =>
+          request.method === 'GET' &&
+          sameOrigin &&
+          !pathname.startsWith('/api/') &&
+          pathname.startsWith('/student'),
+        handler: 'NetworkFirst',
+        method: 'GET',
+        options: {
+          cacheName: 'student-nav-dynamic',
+          networkTimeoutSeconds: 5,
+          expiration: { maxEntries: 120, maxAgeSeconds: 5 * 60 },
+          cacheableResponse: { statuses: [200] },
+        },
+      },
+      /**
        * إن بقي CacheFirst لحزم JS فإن Server Actions القديمة تبقى بعد النشر فيُرفض المعرّف على الخادم.
        * NetworkFirst يجلب آخر البناء عند توفر الشبكة، مع احتياط من الكاش عند الانقطاع.
        */

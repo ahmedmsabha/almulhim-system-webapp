@@ -23,7 +23,7 @@ export async function getCurrentUser() {
   return user
 }
 
-function mapDbProfile(row: typeof profiles.$inferSelect): Profile {
+export function profileFromDbRow(row: typeof profiles.$inferSelect): Profile {
   return {
     id: row.id,
     email: row.email,
@@ -40,9 +40,12 @@ function mapDbProfile(row: typeof profiles.$inferSelect): Profile {
 // Get current user's profile
 export async function getCurrentProfile(): Promise<Profile | null> {
   const supabase = await createClient()
-  const user = await getCurrentUser()
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser()
 
-  if (!user) {
+  if (userError || !user) {
     return null
   }
 
@@ -55,7 +58,7 @@ export async function getCurrentProfile(): Promise<Profile | null> {
       tx.select().from(profiles).where(eq(profiles.id, user.id)).limit(1)
     )
     const row = rows[0]
-    return row ? mapDbProfile(row) : null
+    return row ? profileFromDbRow(row) : null
   }
 
   const fallback = await adminDb
@@ -64,7 +67,7 @@ export async function getCurrentProfile(): Promise<Profile | null> {
     .where(eq(profiles.id, user.id))
     .limit(1)
   const row = fallback[0]
-  return row ? mapDbProfile(row) : null
+  return row ? profileFromDbRow(row) : null
 }
 
 // Check if user is admin
@@ -76,13 +79,15 @@ export async function isAdmin(): Promise<boolean> {
 // Check if user has active subscription
 export async function hasActiveSubscription(): Promise<boolean> {
   const supabase = await createClient()
-  const user = await getCurrentUser()
-
-  if (!user) {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession()
+  const userId = session?.user?.id
+  if (!userId) {
     return false
   }
 
-  return subscriptionIsActive(adminDb, user.id)
+  return subscriptionIsActive(adminDb, userId)
 }
 
 // Sign out

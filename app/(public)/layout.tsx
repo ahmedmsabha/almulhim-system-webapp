@@ -6,6 +6,10 @@ import { BRAND } from '@/lib/config'
 import type { MergedTeacherContact } from '@/lib/db/queries/site-settings'
 import { getPublicSiteSnapshot } from '@/lib/server/public-site-snapshot'
 
+/** بيانات المعلِّم والإحصاءات من القاعدة — لا تجميد HTML عند البناء ولا كاش مسار طويل */
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
 function Header({ teacherDisplayName }: { teacherDisplayName: string }) {
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">

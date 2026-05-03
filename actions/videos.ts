@@ -5,7 +5,7 @@ import {
   actionSuccess,
   mapCaughtErrorToAction,
 } from "@/lib/action-utils"
-import { getSessionAccessToken, requireStudent } from "@/actions/auth"
+import { requireStudentSession } from "@/actions/auth"
 import {
   getSubscriberVideos,
   getVideoWithAccess,
@@ -16,17 +16,12 @@ import type { VideoLesson } from "@/types"
 
 export async function getVideos(): Promise<ActionResult<VideoLesson[]>> {
   try {
-    const gate = await requireStudent()
+    const gate = await requireStudentSession()
     if (!gate.success) {
       return actionFailure(gate.error, gate.code)
     }
 
-    const token = await getSessionAccessToken()
-    if (!token) {
-      return actionFailure("انتهت الجلسة", "UNAUTHORIZED")
-    }
-
-    const data = await getSubscriberVideos(token)
+    const data = await getSubscriberVideos(gate.data.accessToken)
     return actionSuccess(data)
   } catch (e) {
     return mapCaughtErrorToAction(e)
@@ -37,12 +32,12 @@ export async function getVideoById(
   videoId: string
 ): Promise<ActionResult<VideoLesson>> {
   try {
-    const token = await getSessionAccessToken()
-    if (!token) {
-      return actionFailure("يجب تسجيل الدخول", "UNAUTHORIZED")
+    const gate = await requireStudentSession()
+    if (!gate.success) {
+      return actionFailure(gate.error, gate.code)
     }
 
-    const data = await getVideoWithAccess(videoId, token)
+    const data = await getVideoWithAccess(videoId, gate.data.accessToken)
     return actionSuccess(data)
   } catch (e) {
     return mapCaughtErrorToAction(e)
@@ -56,23 +51,18 @@ export async function updateProgress(input: {
   completed: boolean
 }): Promise<ActionResult<{ ok: true }>> {
   try {
-    const gate = await requireStudent()
+    const gate = await requireStudentSession()
     if (!gate.success) {
       return actionFailure(gate.error, gate.code)
     }
 
-    const token = await getSessionAccessToken()
-    if (!token) {
-      return actionFailure("انتهت الجلسة", "UNAUTHORIZED")
-    }
-
     await upsertWatchProgress(
-      gate.data.id,
+      gate.data.profile.id,
       input.lessonId,
       input.secondsWatched,
       input.progressPercent,
       input.completed,
-      token
+      gate.data.accessToken
     )
     return actionSuccess({ ok: true })
   } catch (e) {

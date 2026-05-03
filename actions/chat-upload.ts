@@ -14,7 +14,7 @@ import {
   validateAttachmentBatch,
 } from "@/lib/chat/attachment-rules"
 import { assertConversationParticipant, assertParticipantPathsForConversation } from "@/lib/db/queries/messages"
-import { getSessionAccessToken, requireAdmin, requireStudent } from "@/actions/auth"
+import { requireStudentOrAdminSession } from "@/actions/auth"
 import { STORAGE_BUCKETS } from "@/lib/config"
 import { createSupabaseForSignedStorageOps } from "@/lib/supabase/storage-admin-client"
 import type { ActionResult } from "@/types/api"
@@ -38,12 +38,9 @@ export async function requestChatAttachmentUploads(input: {
   items: z.infer<typeof uploadItemSchema>[]
 }): Promise<ActionResult<{ path: string; token: string }[]>> {
   try {
-    const studentGate = await requireStudent()
-    const adminGate = await requireAdmin()
-    const isStudent = studentGate.success
-    const isAdmin = adminGate.success
-    if (!isStudent && !isAdmin) {
-      return actionFailure("يجب تسجيل الدخول", "UNAUTHORIZED")
+    const gate = await requireStudentOrAdminSession()
+    if (!gate.success) {
+      return actionFailure(gate.error, gate.code)
     }
 
     const parsed = z
@@ -75,12 +72,7 @@ export async function requestChatAttachmentUploads(input: {
       }
     }
 
-    const token = await getSessionAccessToken()
-    if (!token) {
-      return actionFailure("انتهت الجلسة", "UNAUTHORIZED")
-    }
-
-    await assertConversationParticipant(conversationId, token)
+    const token = gate.data.accessToken
 
     const supabase = await createSupabaseForSignedStorageOps()
     const outs: { path: string; token: string }[] = []
@@ -116,10 +108,9 @@ export async function signChatAttachmentUrls(input: {
   paths: string[]
 }): Promise<ActionResult<Record<string, string>>> {
   try {
-    const studentGate = await requireStudent()
-    const adminGate = await requireAdmin()
-    if (!studentGate.success && !adminGate.success) {
-      return actionFailure("يجب تسجيل الدخول", "UNAUTHORIZED")
+    const gate = await requireStudentOrAdminSession()
+    if (!gate.success) {
+      return actionFailure(gate.error, gate.code)
     }
 
     const parsed = signedPathsSchema.safeParse(input)
@@ -127,15 +118,10 @@ export async function signChatAttachmentUrls(input: {
       return actionFailure("بيانات غير صالحة", "UNKNOWN")
     }
 
-    const token = await getSessionAccessToken()
-    if (!token) {
-      return actionFailure("انتهت الجلسة", "UNAUTHORIZED")
-    }
-
     await assertParticipantPathsForConversation(
       parsed.data.conversationId,
       parsed.data.paths,
-      token
+      gate.data.accessToken
     )
 
     const { signChatStoragePaths } = await import("@/lib/server/chat-signing")

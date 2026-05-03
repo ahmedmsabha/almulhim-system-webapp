@@ -7,7 +7,7 @@ import {
   actionSuccess,
   mapCaughtErrorToAction,
 } from "@/lib/action-utils"
-import { getSessionAccessToken, requireStudent } from "@/actions/auth"
+import { requireStudentSession } from "@/actions/auth"
 import { withUserDb } from "@/lib/db/client"
 import { studentDeviceBindings } from "@/lib/db/schema"
 import { hashDeviceToken } from "@/lib/server/device-token-hash"
@@ -20,7 +20,7 @@ export async function syncStudentDeviceBinding(
   plainDeviceToken: string
 ): Promise<ActionResult<{ ok: true }>> {
   try {
-    const gate = await requireStudent()
+    const gate = await requireStudentSession()
     if (!gate.success) {
       return actionFailure(gate.error, gate.code)
     }
@@ -30,13 +30,10 @@ export async function syncStudentDeviceBinding(
       return actionFailure("معرّف الجهاز غير صالح", "VALIDATION_ERROR")
     }
 
-    const accessToken = await getSessionAccessToken()
-    if (!accessToken) {
-      return actionFailure("انتهت الجلسة", "UNAUTHORIZED")
-    }
+    const accessToken = gate.data.accessToken
 
     const hash = hashDeviceToken(token)
-    const studentId = gate.data.id
+    const studentId = gate.data.profile.id
 
     await withUserDb(accessToken, async (db) => {
       const [row] = await db

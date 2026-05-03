@@ -5,7 +5,7 @@ import {
   actionSuccess,
   mapCaughtErrorToAction,
 } from "@/lib/action-utils"
-import { getSessionAccessToken, requireAdmin, requireStudent } from "@/actions/auth"
+import { requireAdmin, requireStudentSession } from "@/actions/auth"
 import {
   createAnnouncement as insertAnnouncement,
   getAnnouncements as fetchAnnouncementsForUser,
@@ -15,17 +15,12 @@ import type { Announcement } from "@/types"
 
 export async function getAnnouncements(): Promise<ActionResult<Announcement[]>> {
   try {
-    const gate = await requireStudent()
+    const gate = await requireStudentSession()
     if (!gate.success) {
       return actionFailure(gate.error, gate.code)
     }
 
-    const token = await getSessionAccessToken()
-    if (!token) {
-      return actionFailure("انتهت الجلسة", "UNAUTHORIZED")
-    }
-
-    const data = await fetchAnnouncementsForUser(token, { is_published: true })
+    const data = await fetchAnnouncementsForUser(gate.data.accessToken, { is_published: true })
     return actionSuccess(data)
   } catch (e) {
     return mapCaughtErrorToAction(e)

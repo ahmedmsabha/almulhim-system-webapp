@@ -1,12 +1,15 @@
 import "server-only"
 
+import { eq } from "drizzle-orm"
 import { redirect } from "next/navigation"
 import { cache } from "react"
 
-import { getCurrentProfile } from "@/lib/supabase/auth"
+import { withUserDb } from "@/lib/db/client"
+import { profiles } from "@/lib/db/schema"
+import { getStudentProfileRowAndLatestSubscription } from "@/lib/db/queries/subscriptions-read"
+import { profileFromDbRow } from "@/lib/supabase/auth"
 import { ensureProfileRow } from "@/lib/supabase/ensure-profile"
 import { createClient } from "@/lib/supabase/server"
-import { getLatestSubscriptionForStudent } from "@/lib/db/queries/subscriptions-read"
 import type { Profile, Subscription, StudentSubscriptionUiStatus } from "@/types"
 
 function studentSubscriptionUiStatus(
@@ -38,9 +41,6 @@ const loadStudentLayoutContext = cache(async (): Promise<StudentLayoutContext> =
   if (!user) redirect("/login")
 
   await ensureProfileRow(user)
-  const profile = await getCurrentProfile()
-  if (!profile) redirect("/login")
-  if (profile.role !== "student") redirect("/admin")
 
   const {
     data: { session },
@@ -49,11 +49,20 @@ const loadStudentLayoutContext = cache(async (): Promise<StudentLayoutContext> =
   if (!accessToken) redirect("/login")
 
   let subscription: Subscription | null = null
+  let profile: Profile | undefined
   try {
-    subscription = await getLatestSubscriptionForStudent(accessToken)
+    const { profile: rawProfile, subscription: sub } =
+      await getStudentProfileRowAndLatestSubscription(accessToken, user.id)
+    if (!rawProfile || rawProfile.role !== "student") {
+      redirect("/admin")
+    }
+    profile = profileFromDbRow(rawProfile)
+    subscription = sub
   } catch {
-    subscription = null
+    redirect("/login")
   }
+
+  if (!profile) redirect("/login")
 
   const subscriptionStatus = studentSubscriptionUiStatus(subscription)
   return { profile, subscription, subscriptionStatus, accessToken }
@@ -80,9 +89,27 @@ const loadAdminLayoutContext = cache(async (): Promise<{ profile: Profile }> => 
   if (!user) redirect("/login")
 
   await ensureProfileRow(user)
-  const profile = await getCurrentProfile()
+
+  const {
+    data: { session },
+  } = await supabase.auth.getSession()
+  const accessToken = session?.access_token
+  if (!accessToken) redirect("/login")
+
+  let profile: Profile | undefined
+  try {
+    const [rawProfile] = await withUserDb(accessToken, async (tx) =>
+      tx.select().from(profiles).where(eq(profiles.id, user.id)).limit(1)
+    )
+    if (!rawProfile || rawProfile.role !== "admin") {
+      redirect("/student")
+    }
+    profile = profileFromDbRow(rawProfile)
+  } catch {
+    redirect("/login")
+  }
+
   if (!profile) redirect("/login")
-  if (profile.role !== "admin") redirect("/student")
 
   return { profile }
 })

@@ -1,10 +1,13 @@
 "use server"
 
+import { eq } from "drizzle-orm"
 import { redirect } from "next/navigation"
 
+import { withUserDb } from "@/lib/db/client"
+import { profiles } from "@/lib/db/schema"
 import { createClient } from "@/lib/supabase/server"
 import {
-  getCurrentProfile,
+  profileFromDbRow,
   getCurrentUser as getSupabaseAuthUser,
 } from "@/lib/supabase/auth"
 import { ensureProfileRow } from "@/lib/supabase/ensure-profile"
@@ -15,6 +18,85 @@ import {
 } from "@/lib/action-utils"
 import type { ActionResult } from "@/types/api"
 import type { Profile } from "@/types"
+
+async function resolveSessionRoleGate(
+  expectedRole: "student" | "admin"
+): Promise<ActionResult<{ profile: Profile; accessToken: string }>> {
+  try {
+    const supabase = await createClient()
+    const {
+      data: { session },
+      error,
+    } = await supabase.auth.getSession()
+    if (error || !session?.access_token || !session.user) {
+      return actionFailure("يجب تسجيل الدخول", "UNAUTHORIZED")
+    }
+
+    const rows = await withUserDb(session.access_token, async (tx) =>
+      tx.select().from(profiles).where(eq(profiles.id, session.user.id)).limit(1)
+    )
+    const row = rows[0]
+    if (!row) {
+      return actionFailure("تعذر تحميل الملف الشخصي", "UNKNOWN")
+    }
+    const profile = profileFromDbRow(row)
+
+    if (profile.role !== expectedRole) {
+      return expectedRole === "student" ?
+          actionFailure("هذا القسم للطلاب فقط", "FORBIDDEN")
+        : actionFailure("يتطلب صلاحية المعلم", "FORBIDDEN")
+    }
+
+    return actionSuccess({ profile, accessToken: session.access_token })
+  } catch (e) {
+    return mapCaughtErrorToAction(e)
+  }
+}
+
+export async function requireStudentSession(): Promise<
+  ActionResult<{ profile: Profile; accessToken: string }>
+> {
+  return resolveSessionRoleGate("student")
+}
+
+export async function requireAdminSession(): Promise<
+  ActionResult<{ profile: Profile; accessToken: string }>
+> {
+  return resolveSessionRoleGate("admin")
+}
+
+/** طالب أو مشرف؛ جلسة واحدة بدل محاولتي requireStudent/requireAdmin المتتاليتين. */
+export async function requireStudentOrAdminSession(): Promise<
+  ActionResult<{ profile: Profile; accessToken: string }>
+> {
+  try {
+    const supabase = await createClient()
+    const {
+      data: { session },
+      error,
+    } = await supabase.auth.getSession()
+    if (error || !session?.access_token || !session.user) {
+      return actionFailure("يجب تسجيل الدخول", "UNAUTHORIZED")
+    }
+
+    const rows = await withUserDb(session.access_token, async (tx) =>
+      tx.select().from(profiles).where(eq(profiles.id, session.user.id)).limit(1)
+    )
+    const row = rows[0]
+    if (!row) {
+      return actionFailure("تعذر تحميل الملف الشخصي", "UNKNOWN")
+    }
+    const profile = profileFromDbRow(row)
+
+    if (profile.role !== "student" && profile.role !== "admin") {
+      return actionFailure("يجب تسجيل الدخول", "UNAUTHORIZED")
+    }
+
+    return actionSuccess({ profile, accessToken: session.access_token })
+  } catch (e) {
+    return mapCaughtErrorToAction(e)
+  }
+}
 
 export async function getCurrentUser(): Promise<
   ActionResult<{ id: string; email: string | undefined } | null>
@@ -32,14 +114,8 @@ export async function getCurrentUser(): Promise<
 
 export async function requireStudent(): Promise<ActionResult<Profile>> {
   try {
-    const profile = await getCurrentProfile()
-    if (!profile) {
-      return actionFailure("يجب تسجيل الدخول", "UNAUTHORIZED")
-    }
-    if (profile.role !== "student") {
-      return actionFailure("هذا القسم للطلاب فقط", "FORBIDDEN")
-    }
-    return actionSuccess(profile)
+    const r = await resolveSessionRoleGate("student")
+    return r.success ? actionSuccess(r.data.profile) : r
   } catch (e) {
     return mapCaughtErrorToAction(e)
   }
@@ -47,14 +123,8 @@ export async function requireStudent(): Promise<ActionResult<Profile>> {
 
 export async function requireAdmin(): Promise<ActionResult<Profile>> {
   try {
-    const profile = await getCurrentProfile()
-    if (!profile) {
-      return actionFailure("يجب تسجيل الدخول", "UNAUTHORIZED")
-    }
-    if (profile.role !== "admin") {
-      return actionFailure("يتطلب صلاحية المعلم", "FORBIDDEN")
-    }
-    return actionSuccess(profile)
+    const r = await resolveSessionRoleGate("admin")
+    return r.success ? actionSuccess(r.data.profile) : r
   } catch (e) {
     return mapCaughtErrorToAction(e)
   }
@@ -79,19 +149,24 @@ export async function resolvePostLoginDestination(): Promise<ActionResult<string
   try {
     const supabase = await createClient()
     const {
-      data: { user },
-    } = await supabase.auth.getUser()
-    if (!user) {
+      data: { session },
+      error,
+    } = await supabase.auth.getSession()
+    if (error || !session?.user || !session.access_token) {
       return actionFailure("يجب تسجيل الدخول", "UNAUTHORIZED")
     }
 
-    await ensureProfileRow(user)
-    const profile = await getCurrentProfile()
-    if (!profile) {
+    await ensureProfileRow(session.user)
+
+    const rows = await withUserDb(session.access_token, async (tx) =>
+      tx.select().from(profiles).where(eq(profiles.id, session.user.id)).limit(1)
+    )
+    const row = rows[0]
+    if (!row) {
       return actionFailure("تعذر إنشاء الملف الشخصي", "UNKNOWN")
     }
 
-    return actionSuccess(profile.role === "admin" ? "/admin" : "/student")
+    return actionSuccess(row.role === "admin" ? "/admin" : "/student")
   } catch (e) {
     return mapCaughtErrorToAction(e)
   }

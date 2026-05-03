@@ -31,8 +31,16 @@ export async function proxy(request: NextRequest) {
   return supabaseResponse
 }
 
+/**
+ * تجديد الجلسة فقط للمسارات التي تحتاج مزامنة كوكي (صفحات بعد الدخول + API المحمية).
+ * استثناء الصفحات العامة يقلّل وقت أول تحميل على اتصالات ضعيفة.
+ */
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/student/:path*",
+    "/admin/:path*",
+    "/api/student/:path*",
+    "/auth/confirm/:path*",
+    "/offline/:path*",
   ],
 }

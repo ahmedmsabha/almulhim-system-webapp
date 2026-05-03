@@ -11,11 +11,26 @@ export type UserDb = PostgresJsDatabase<typeof schema>
 
 let adminPg: ReturnType<typeof postgres> | undefined
 
+/** تجمع اتصالات الـ pooler لطلبات RLS؛ إنشاء اتصال جديد لكل إجراء كان مكلفاً جداً على اتصالات عالية الزمن (مثل غزة). */
+let userRlsPg: ReturnType<typeof postgres> | undefined
+
 function getAdminPg() {
   if (!adminPg) {
     adminPg = postgres(env.DATABASE_URL, { prepare: false, max: 10 })
   }
   return adminPg
+}
+
+function getUserRlsPool() {
+  if (!userRlsPg) {
+    userRlsPg = postgres(env.databaseUrlPooler, {
+      prepare: false,
+      max: 10,
+      idle_timeout: 25,
+      max_lifetime: 60 * 30,
+    })
+  }
+  return userRlsPg
 }
 
 /**
@@ -42,20 +57,16 @@ export async function withUserDb<T>(
   accessToken: string,
   fn: (db: UserDb) => Promise<T>
 ): Promise<T> {
-  const pg = postgres(env.databaseUrlPooler, { prepare: false, max: 1 })
+  const pg = getUserRlsPool()
   const db = drizzle(pg, { schema })
 
-  try {
-    return await db.transaction(async (tx) => {
-      const payload = jwtDecode<Record<string, unknown>>(accessToken)
-      const claimsJson = JSON.stringify(payload)
+  return db.transaction(async (tx) => {
+    const payload = jwtDecode<Record<string, unknown>>(accessToken)
+    const claimsJson = JSON.stringify(payload)
 
-      await tx.execute(sql`select set_config('request.jwt.claims', ${claimsJson}, true)`)
-      await tx.execute(sql`set local role authenticated`)
+    await tx.execute(sql`select set_config('request.jwt.claims', ${claimsJson}, true)`)
+    await tx.execute(sql`set local role authenticated`)
 
-      return await fn(tx)
-    })
-  } finally {
-    await pg.end({ timeout: 5 }).catch(() => undefined)
-  }
+    return await fn(tx)
+  })
 }

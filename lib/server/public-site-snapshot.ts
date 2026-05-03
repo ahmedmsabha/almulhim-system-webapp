@@ -1,7 +1,8 @@
 import "server-only"
 
 import { cache } from "react"
-import { and, asc, count, eq, inArray, sql } from "drizzle-orm"
+import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm"
+import { unstable_noStore as noStore } from "next/cache"
 
 import {
   getMergedTeacherContact,
@@ -38,6 +39,9 @@ export type PublicSiteSnapshot = {
  * بيانات عامة للصفحة الرئيسية والتذييل: معلِّم من جدول الملفات الشخصية، إحصاءات من الجداول، دروس المعاينة المنشورة.
  */
 export const getPublicSiteSnapshot = cache(async (): Promise<PublicSiteSnapshot> => {
+  /** يمنع تخزين RSC/HTML لهذا المسار في كاش مسار Next — يكمِّل تعطيل الكاش عن طريق SW في الإنتاج */
+  noStore()
+
   const today = sql`timezone('utc'::text, now())::timestamp with time zone`
 
   const [
@@ -52,8 +56,8 @@ export const getPublicSiteSnapshot = cache(async (): Promise<PublicSiteSnapshot>
     adminDb
       .select({ full_name: profiles.full_name, email: profiles.email })
       .from(profiles)
-      .where(eq(profiles.role, "admin"))
-      .orderBy(asc(profiles.created_at))
+      .where(sql`lower(trim(coalesce(${profiles.role}, ''))) = 'admin'`)
+      .orderBy(desc(profiles.updated_at))
       .limit(1),
     adminDb
       .select({

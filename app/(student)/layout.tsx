@@ -2,6 +2,9 @@ import { StudentAppShell } from '@/components/student/student-app-shell'
 import { StudentLayoutSubscriptionProvider } from '@/components/student/student-layout-provider'
 import { requireStudentLayoutContext } from '@/lib/server/layout-gates'
 
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
 export default async function StudentLayout({
   children,
 }: {

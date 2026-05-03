@@ -3,7 +3,7 @@ import { desc, eq } from "drizzle-orm"
 import { jwtDecode, type JwtPayload } from "jwt-decode"
 
 import { withUserDb } from "@/lib/db/client"
-import { subscriptions } from "@/lib/db/schema"
+import { profiles, subscriptions } from "@/lib/db/schema"
 import { UnauthorizedError } from "@/lib/db/errors"
 import type { Subscription } from "@/types"
 
@@ -45,5 +45,44 @@ export async function getLatestSubscriptionForStudent(
       return { ...mapped, status: "expired" }
     }
     return mapped
+  })
+}
+
+/** صف واحد من قاعدة البيانات: ملف شخصي + أحدث اشتراك؛ يقتصر عدد المعاملات والاتصالات. */
+export async function getStudentProfileRowAndLatestSubscription(
+  accessToken: string,
+  studentId: string
+): Promise<{
+  profile: typeof profiles.$inferSelect | null
+  subscription: Subscription | null
+}> {
+  const subJwt = jwtDecode<JwtPayload>(accessToken).sub
+  if (!subJwt || subJwt !== studentId) throw new UnauthorizedError()
+
+  return withUserDb(accessToken, async (tx) => {
+    const [profRows, subRows] = await Promise.all([
+      tx.select().from(profiles).where(eq(profiles.id, studentId)).limit(1),
+      tx
+        .select()
+        .from(subscriptions)
+        .where(eq(subscriptions.student_id, studentId))
+        .orderBy(desc(subscriptions.created_at))
+        .limit(1),
+    ])
+
+    const profileRow = profRows[0]
+    let subscription: Subscription | null = null
+    const subRow = subRows[0]
+    if (subRow) {
+      const mapped = mapRow(subRow)
+      const endMs = subRow.end_date.getTime()
+      if (Date.now() > endMs && mapped.status !== "cancelled") {
+        subscription = { ...mapped, status: "expired" }
+      } else {
+        subscription = mapped
+      }
+    }
+
+    return { profile: profileRow ?? null, subscription }
   })
 }

@@ -5,7 +5,7 @@ import {
   actionSuccess,
   mapCaughtErrorToAction,
 } from "@/lib/action-utils"
-import { getSessionAccessToken, requireAdmin, requireStudent } from "@/actions/auth"
+import { requireAdmin, requireAdminSession, requireStudentSession } from "@/actions/auth"
 import {
   getMessages as fetchMessages,
   getMessagesForAdmin,
@@ -37,17 +37,12 @@ export async function getConversation(
   conversationId: string
 ): Promise<ActionResult<Message[]>> {
   try {
-    const gate = await requireStudent()
+    const gate = await requireStudentSession()
     if (!gate.success) {
       return actionFailure(gate.error, gate.code)
     }
 
-    const token = await getSessionAccessToken()
-    if (!token) {
-      return actionFailure("انتهت الجلسة", "UNAUTHORIZED")
-    }
-
-    const data = await fetchMessages(conversationId, token)
+    const data = await fetchMessages(conversationId, gate.data.accessToken)
     return actionSuccess(data)
   } catch (e) {
     return mapCaughtErrorToAction(e)
@@ -58,7 +53,7 @@ export async function sendStudentMessage(
   input: z.infer<typeof sendSchema>
 ): Promise<ActionResult<Message>> {
   try {
-    const gate = await requireStudent()
+    const gate = await requireStudentSession()
     if (!gate.success) {
       return actionFailure(gate.error, gate.code)
     }
@@ -68,16 +63,11 @@ export async function sendStudentMessage(
       return actionFailure("بيانات غير صالحة", "UNKNOWN")
     }
 
-    const token = await getSessionAccessToken()
-    if (!token) {
-      return actionFailure("يجب تسجيل الدخول", "UNAUTHORIZED")
-    }
-
     const msg = await sendMessageDb(
       parsed.data.conversationId,
-      gate.data.id,
+      gate.data.profile.id,
       parsed.data.content,
-      token,
+      gate.data.accessToken,
       parsed.data.attachments as MessageAttachment[] | undefined
     )
     return actionSuccess(msg)
@@ -90,7 +80,7 @@ export async function sendAdminThreadMessage(
   input: z.infer<typeof sendSchema>
 ): Promise<ActionResult<Message>> {
   try {
-    const gate = await requireAdmin()
+    const gate = await requireAdminSession()
     if (!gate.success) {
       return actionFailure(gate.error, gate.code)
     }
@@ -100,16 +90,11 @@ export async function sendAdminThreadMessage(
       return actionFailure("بيانات غير صالحة", "UNKNOWN")
     }
 
-    const token = await getSessionAccessToken()
-    if (!token) {
-      return actionFailure("يجب تسجيل الدخول", "UNAUTHORIZED")
-    }
-
     const msg = await sendMessageDb(
       parsed.data.conversationId,
-      gate.data.id,
+      gate.data.profile.id,
       parsed.data.content,
-      token,
+      gate.data.accessToken,
       parsed.data.attachments as MessageAttachment[] | undefined
     )
     return actionSuccess(msg)
@@ -122,17 +107,12 @@ export async function markAsRead(
   conversationId: string
 ): Promise<ActionResult<{ ok: true }>> {
   try {
-    const gate = await requireStudent()
+    const gate = await requireStudentSession()
     if (!gate.success) {
       return actionFailure(gate.error, gate.code)
     }
 
-    const token = await getSessionAccessToken()
-    if (!token) {
-      return actionFailure("انتهت الجلسة", "UNAUTHORIZED")
-    }
-
-    await markMessagesAsReadDb(conversationId, token)
+    await markMessagesAsReadDb(conversationId, gate.data.accessToken)
     return actionSuccess({ ok: true })
   } catch (e) {
     return mapCaughtErrorToAction(e)
