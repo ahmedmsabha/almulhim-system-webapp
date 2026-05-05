@@ -10,12 +10,15 @@ import { Eye, EyeOff, Mail, Lock } from 'lucide-react'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
 import { resolvePostLoginDestination } from '@/actions/auth'
+import { signInWithPasswordAction } from '@/actions/authActions'
 import { syncStudentDeviceBinding } from '@/actions/device-binding'
 import { getOrCreateDeviceToken } from '@/lib/client/device-token-storage'
+import { Checkbox } from '@/components/ui/checkbox'
 
 export function LoginForm() {
   const [isLoading, setIsLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
+  const [rememberMe, setRememberMe] = useState(true)
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -27,14 +30,14 @@ export function LoginForm() {
 
     let leavePage = false
     try {
-      const supabase = createClient()
-      const { error } = await supabase.auth.signInWithPassword({
+      const authResult = await signInWithPasswordAction({
         email: formData.email.trim(),
         password: formData.password,
+        rememberMe,
       })
 
-      if (error) {
-        toast.error(error.message || 'فشل تسجيل الدخول.')
+      if (!authResult.success) {
+        toast.error(authResult.error || 'فشل تسجيل الدخول.')
         return
       }
 
@@ -47,6 +50,7 @@ export function LoginForm() {
       if (dest.data === '/student') {
         const device = await syncStudentDeviceBinding(getOrCreateDeviceToken())
         if (!device.success) {
+          const supabase = createClient()
           await supabase.auth.signOut()
           toast.error(device.error)
           return
@@ -124,6 +128,25 @@ export function LoginForm() {
                 </span>
               </button>
             </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="remember-me"
+              checked={rememberMe}
+              onCheckedChange={(checked) => setRememberMe(checked === true)}
+              disabled={isLoading}
+            />
+            <Label
+              htmlFor="remember-me"
+              className={
+                isLoading ?
+                  'cursor-not-allowed text-sm font-normal leading-none opacity-70'
+                : 'cursor-pointer text-sm font-normal leading-none'
+              }
+            >
+              ابقني مسجلاً
+            </Label>
           </div>
 
           <Button type="submit" className="w-full" disabled={isLoading}>

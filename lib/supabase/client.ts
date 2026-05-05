@@ -14,7 +14,18 @@ function browserAnonKey(): string {
 
 // Browser client for client-side components
 export function createClient() {
-  return createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, browserAnonKey())
+  return createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    browserAnonKey(),
+    {
+      auth: {
+        persistSession: true,
+        storageKey: 'almulhim-auth',
+        autoRefreshToken: true,
+        detectSessionInUrl: false,
+      },
+    },
+  )
 }
 
 // TODO: Configure Supabase project with the following tables:

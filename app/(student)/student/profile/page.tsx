@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 
+import { PushNotificationToggle } from '@/components/PushNotificationToggle'
 import { StudentProfileView } from '@/components/student/student-profile-view'
 import { requireStudentLayoutContext } from '@/lib/server/layout-gates'
 
@@ -17,6 +18,7 @@ export default async function ProfilePage() {
       profile={profile}
       subscription={subscription}
       subscriptionStatus={subscriptionStatus}
+      notificationToggle={<PushNotificationToggle />}
     />
   )
 }

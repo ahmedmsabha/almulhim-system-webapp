@@ -10,3 +10,9 @@ export const VerifyOtpSchema = z.object({
   email: z.string().email(),
   token: z.string().regex(/^\d{6}$/),
 })
+
+export const LoginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(1),
+  rememberMe: z.boolean(),
+})

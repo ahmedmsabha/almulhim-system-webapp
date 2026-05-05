@@ -1,5 +1,7 @@
 'use client'
 
+import type { ReactNode } from 'react'
+
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
@@ -7,7 +9,6 @@ import { Progress } from '@/components/ui/progress'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { SubscriptionBadge } from '@/components/student/profile/subscription-badge'
 import { TeacherContactButtons } from '@/components/student/teacher-contact-buttons'
-import { PushNotificationToggle } from '@/components/PushNotificationToggle'
 import {
   User,
   Mail,
@@ -51,10 +52,12 @@ export function StudentProfileView({
   profile,
   subscription,
   subscriptionStatus,
+  notificationToggle,
 }: {
   profile: Profile
   subscription: Subscription | null
   subscriptionStatus: StudentSubscriptionUiStatus
+  notificationToggle: ReactNode
 }) {
   const subscriptionBadgeDisplay =
     subscription?.status === 'expiring_soon' ? 'expiring_soon' : subscriptionStatus
@@ -129,6 +132,16 @@ export function StudentProfileView({
                 </div>
               </div>
             </div>
+
+            <Separator className="my-6" />
+            <div>
+              <p className="text-sm font-semibold text-foreground">إشعارات المنصّة</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                تنبيهات فورية للإعلانات والرسائل وتذكيرات الاشتراك (على الأجهزة التي تدعم Web
+                Push).
+              </p>
+              <div className="mt-4">{notificationToggle}</div>
+            </div>
           </CardContent>
         </Card>
 
@@ -171,23 +184,6 @@ export function StudentProfileView({
               subscriptionStatus === 'none') && (
               <TeacherContactButtons layout="stack" className="w-full pt-1" />
             )}
-          </CardContent>
-        </Card>
-
-        <Card className="lg:col-span-3 border-border/70 shadow-sm">
-          <CardHeader className="border-b bg-muted/20">
-            <CardTitle className="text-lg font-bold">الإعدادات</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 pt-6">
-            <div>
-              <p className="text-sm font-semibold text-foreground">إشعارات المنصّة</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                تنبيهات فورية للإعلانات والرسائل وتذكيرات الاشتراك (على الأجهزة التي تدعم Web Push).
-              </p>
-              <div className="mt-4">
-                <PushNotificationToggle />
-              </div>
-            </div>
           </CardContent>
         </Card>
 
