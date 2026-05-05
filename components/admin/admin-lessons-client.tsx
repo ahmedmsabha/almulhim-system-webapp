@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -88,14 +88,6 @@ export function AdminLessonsClient({
 }) {
   const queryClient = useQueryClient()
 
-  const invalidateLessons = useCallback(async () => {
-    try {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
-    } catch {
-      /* ignore */
-    }
-  }, [queryClient])
-
   const { data: lessons = initialLessons } = useQuery({
     queryKey: queryKeys.adminLessons(),
     queryFn: async () => {
@@ -124,13 +116,17 @@ export function AdminLessonsClient({
         throw e instanceof Error ? e : new Error("فشل التحديث")
       }
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success("تم تحديث نوع الدرس")
+      try {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
+      } catch {
+        /* ignore */
+      }
     },
     onError: (err: Error) => {
       toast.error(err.message)
     },
-    onSettled: invalidateLessons,
   })
 
   const deleteLessonMutation = useMutation({
@@ -145,13 +141,17 @@ export function AdminLessonsClient({
         throw e instanceof Error ? e : new Error("فشل الحذف")
       }
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success("تم حذف الدرس")
+      try {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
+      } catch {
+        /* ignore */
+      }
     },
     onError: (err: Error) => {
       toast.error(err.message)
     },
-    onSettled: invalidateLessons,
   })
 
   const createLessonMutation = useMutation({
@@ -166,7 +166,13 @@ export function AdminLessonsClient({
         throw e instanceof Error ? e : new Error("فشل الإنشاء")
       }
     },
-    onSettled: invalidateLessons,
+    onSuccess: async () => {
+      try {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
+      } catch {
+        /* ignore */
+      }
+    },
   })
 
   const updateLessonMutation = useMutation({
@@ -187,7 +193,13 @@ export function AdminLessonsClient({
         throw e instanceof Error ? e : new Error("فشل الحفظ")
       }
     },
-    onSettled: invalidateLessons,
+    onSuccess: async () => {
+      try {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
+      } catch {
+        /* ignore */
+      }
+    },
   })
 
   const [searchQuery, setSearchQuery] = useState("")
@@ -355,7 +367,7 @@ export function AdminLessonsClient({
       toast.success("تم رفع المجلد وربط قائمة التشغيل بالدرس")
       setFormHlsUrl(fin.data?.hls_url ?? "")
       try {
-        await invalidateLessons()
+        await queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
       } catch {
         /* ignore */
       }

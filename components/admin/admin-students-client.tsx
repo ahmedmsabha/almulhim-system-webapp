@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -64,14 +64,6 @@ export function AdminStudentsClient({
 }) {
   const queryClient = useQueryClient()
 
-  const invalidateStudents = useCallback(async () => {
-    try {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.adminStudents() })
-    } catch {
-      /* ignore */
-    }
-  }, [queryClient])
-
   const { data: students = initialStudents } = useQuery({
     queryKey: queryKeys.adminStudents(),
     queryFn: async () => {
@@ -100,7 +92,13 @@ export function AdminStudentsClient({
         throw e instanceof Error ? e : new Error("فشل الحفظ")
       }
     },
-    onSettled: invalidateStudents,
+    onSuccess: async () => {
+      try {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.adminStudents() })
+      } catch {
+        /* ignore */
+      }
+    },
   })
 
   const deactivateSubscriptionMutation = useMutation({
@@ -115,7 +113,13 @@ export function AdminStudentsClient({
         throw e instanceof Error ? e : new Error("فشل الإلغاء")
       }
     },
-    onSettled: invalidateStudents,
+    onSuccess: async () => {
+      try {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.adminStudents() })
+      } catch {
+        /* ignore */
+      }
+    },
   })
 
   const resetDeviceMutation = useMutation({
@@ -130,13 +134,17 @@ export function AdminStudentsClient({
         throw e instanceof Error ? e : new Error("فشل إعادة ضبط الجهاز")
       }
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success("تم إعادة ضبط الجهاز")
+      try {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.adminStudents() })
+      } catch {
+        /* ignore */
+      }
     },
     onError: (err: Error) => {
       toast.error(err.message)
     },
-    onSettled: invalidateStudents,
   })
 
   const [searchQuery, setSearchQuery] = useState("")
@@ -407,7 +415,9 @@ export function AdminStudentsClient({
                 onClick={() => {
                   void (async () => {
                     try {
-                      await invalidateStudents()
+                      await queryClient.invalidateQueries({
+                        queryKey: queryKeys.adminStudents(),
+                      })
                     } catch {
                       /* ignore */
                     }

@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -69,14 +69,6 @@ export function AdminMaterialsClient({
 }) {
   const queryClient = useQueryClient()
 
-  const invalidateMaterials = useCallback(async () => {
-    try {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.adminMaterials() })
-    } catch {
-      /* ignore */
-    }
-  }, [queryClient])
-
   const { data: materials = initialMaterials } = useQuery({
     queryKey: queryKeys.adminMaterials(),
     queryFn: async () => {
@@ -105,13 +97,17 @@ export function AdminMaterialsClient({
         throw e instanceof Error ? e : new Error("فشل التحديث")
       }
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success("تم تحديث حالة النشر")
+      try {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.adminMaterials() })
+      } catch {
+        /* ignore */
+      }
     },
     onError: (err: Error) => {
       toast.error(err.message)
     },
-    onSettled: invalidateMaterials,
   })
 
   const deletePdfMutation = useMutation({
@@ -126,13 +122,17 @@ export function AdminMaterialsClient({
         throw e instanceof Error ? e : new Error("فشل الحذف")
       }
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success("تم حذف الملف")
+      try {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.adminMaterials() })
+      } catch {
+        /* ignore */
+      }
     },
     onError: (err: Error) => {
       toast.error(err.message)
     },
-    onSettled: invalidateMaterials,
   })
 
   const createPdfMutation = useMutation({
@@ -147,7 +147,13 @@ export function AdminMaterialsClient({
         throw e instanceof Error ? e : new Error("فشل الإنشاء")
       }
     },
-    onSettled: invalidateMaterials,
+    onSuccess: async () => {
+      try {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.adminMaterials() })
+      } catch {
+        /* ignore */
+      }
+    },
   })
 
   const updatePdfMutation = useMutation({
@@ -168,7 +174,13 @@ export function AdminMaterialsClient({
         throw e instanceof Error ? e : new Error("فشل الحفظ")
       }
     },
-    onSettled: invalidateMaterials,
+    onSuccess: async () => {
+      try {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.adminMaterials() })
+      } catch {
+        /* ignore */
+      }
+    },
   })
 
   const [searchQuery, setSearchQuery] = useState("")
@@ -357,7 +369,7 @@ export function AdminMaterialsClient({
           setShowAddDialog(false)
           setEditing(null)
           try {
-            await invalidateMaterials()
+            await queryClient.invalidateQueries({ queryKey: queryKeys.adminMaterials() })
           } catch {
             /* ignore */
           }
@@ -409,11 +421,6 @@ export function AdminMaterialsClient({
       }
       setShowAddDialog(false)
       setEditing(null)
-      try {
-        await invalidateMaterials()
-      } catch {
-        /* ignore */
-      }
     } finally {
       setSaving(false)
     }
