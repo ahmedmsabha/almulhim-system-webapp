@@ -45,7 +45,7 @@ BEGIN
     url := 'https://fcpppqthkuqxomoyiffy.supabase.co/functions/v1/send-push',
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
-      'Authorization', 'Bearer sb_secret_N8SjZcAiYiRaaQkTx8v4Yw_Ej4wZLn-'
+      'Authorization', 'Bearer your-secret-here'
     ),
     body := jsonb_build_object(
       'userIds', target_ids,
