@@ -8,6 +8,7 @@ import { InstallPrompt } from '@/components/InstallPrompt'
 import { IOSInstallBanner } from '@/components/IOSInstallBanner'
 import { MacSafariInstallBanner } from '@/components/MacSafariInstallBanner'
 import { OfflineBanner } from '@/components/OfflineBanner'
+import { QueryProvider } from '@/components/layout/query-provider'
 import { PwaReloadOnServiceWorkerUpdate } from '@/components/PwaReloadOnServiceWorkerUpdate'
 import './globals.css'
 
@@ -80,22 +81,24 @@ export default function RootLayout({
         <link rel="apple-touch-startup-image" href="/splash/iphone-1290x2796.png" />
       </head>
       <body className={`${ibmPlexArabic.variable} ${geistMono.variable} font-sans antialiased min-h-screen`}>
-        <InstallPrompt />
-        <IOSInstallBanner />
-        <MacSafariInstallBanner />
-        <OfflineBanner />
-        <PwaReloadOnServiceWorkerUpdate />
-        {children}
-        <Toaster 
-          position="top-center" 
-          dir="rtl"
-          toastOptions={{
-            classNames: {
-              toast: 'font-sans',
-            },
-          }}
-        />
-        {process.env.NODE_ENV === 'production' && <Analytics />}
+        <QueryProvider>
+          <InstallPrompt />
+          <IOSInstallBanner />
+          <MacSafariInstallBanner />
+          <OfflineBanner />
+          <PwaReloadOnServiceWorkerUpdate />
+          {children}
+          <Toaster 
+            position="top-center" 
+            dir="rtl"
+            toastOptions={{
+              classNames: {
+                toast: 'font-sans',
+              },
+            }}
+          />
+          {process.env.NODE_ENV === 'production' && <Analytics />}
+        </QueryProvider>
       </body>
     </html>
   )

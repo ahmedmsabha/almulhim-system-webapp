@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useRef, useState } from "react"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { FileImage, FileText, Loader2, Mic, Send, Square, X } from "lucide-react"
 
 import { requestChatAttachmentUploads } from "@/actions/chat-upload"
@@ -13,9 +14,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
-import type { ChatAttachmentKind, MessageAttachment } from "@/types"
+import type { ChatAttachmentKind, Message, MessageAttachment } from "@/types"
 import type { ActionResult } from "@/types/api"
-import type { Message } from "@/types"
 
 type SendFn = (
   text: string,
@@ -24,15 +24,22 @@ type SendFn = (
 
 export function ChatComposer({
   conversationId,
+  viewerUserId,
+  messagesQueryKey,
+  senderRole,
   disabled,
   onSend,
 }: {
   conversationId: string
+  viewerUserId: string
+  messagesQueryKey: readonly unknown[]
+  senderRole: "student" | "admin"
   disabled?: boolean
   onSend: SendFn
 }) {
+  const queryClient = useQueryClient()
   const [text, setText] = useState("")
-  const [busy, setBusy] = useState(false)
+  const [preparing, setPreparing] = useState(false)
   const [pending, setPending] = useState<
     { file: File; kind: ChatAttachmentKind }[]
   >([])
@@ -43,6 +50,71 @@ export function ChatComposer({
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const clearPending = () => setPending([])
+
+  const sendMutation = useMutation({
+    mutationFn: async (payload: { text: string; attachments: MessageAttachment[] }) => {
+      try {
+        const result = await onSend(payload.text, payload.attachments)
+        if (!result.success) {
+          throw new Error(result.error)
+        }
+        return result.data
+      } catch (e) {
+        throw e instanceof Error ? e : new Error("فشل الإرسال")
+      }
+    },
+    onMutate: async (vars) => {
+      try {
+        await queryClient.cancelQueries({ queryKey: messagesQueryKey })
+      } catch {
+        /* ignore */
+      }
+
+      const previousMessages = queryClient.getQueryData<Message[]>(messagesQueryKey)
+
+      const optimistic: Message = {
+        id: `temp-${Date.now()}`,
+        conversation_id: conversationId,
+        sender_id: viewerUserId,
+        sender_role: senderRole,
+        content: vars.text,
+        attachments: vars.attachments.map((a) => ({ ...a })),
+        is_read: false,
+        created_at: new Date().toISOString(),
+      }
+
+      queryClient.setQueryData<Message[]>(messagesQueryKey, (old) => [...(old ?? []), optimistic])
+
+      return { previousMessages }
+    },
+    onError: (_err, _vars, context) => {
+      try {
+        if (context?.previousMessages !== undefined) {
+          queryClient.setQueryData(messagesQueryKey, context.previousMessages)
+        }
+      } catch {
+        /* ignore */
+      }
+      toast.error("تعذر الإرسال")
+    },
+    onSuccess: () => {
+      try {
+        setText("")
+        clearPending()
+      } catch {
+        /* ignore */
+      }
+    },
+    onSettled: async () => {
+      try {
+        await queryClient.invalidateQueries({ queryKey: messagesQueryKey })
+      } catch {
+        /* ignore */
+      }
+    },
+  })
+
+  const busy = preparing || sendMutation.isPending
 
   const addFiles = useCallback(
     (files: FileList | File[], mode: "image" | "file") => {
@@ -135,54 +207,55 @@ export function ChatComposer({
     const t = text.trim()
     if ((!t && !pending.length) || busy || disabled) return
 
-    setBusy(true)
+    setPreparing(true)
     try {
       let attachments: MessageAttachment[] = []
       if (pending.length) {
-        const sign = await requestChatAttachmentUploads({
-          conversationId,
-          items: pending.map((p) => ({
-            fileName: p.file.name,
-            mimeType: p.file.type || "application/octet-stream",
+        try {
+          const sign = await requestChatAttachmentUploads({
+            conversationId,
+            items: pending.map((p) => ({
+              fileName: p.file.name,
+              mimeType: p.file.type || "application/octet-stream",
+              kind: p.kind,
+              sizeBytes: p.file.size,
+            })),
+          })
+          if (!sign.success) {
+            toast.error(sign.error)
+            return
+          }
+
+          await Promise.all(
+            sign.data.map((slot, i) =>
+              uploadChatAttachmentViaSignedToken({
+                storagePath: slot.path,
+                token: slot.token,
+                file: pending[i]!.file,
+              })
+            )
+          )
+
+          attachments = pending.map((p, i) => ({
             kind: p.kind,
-            sizeBytes: p.file.size,
-          })),
-        })
-        if (!sign.success) {
-          toast.error(sign.error)
+            storage_path: sign.data[i]!.path,
+            file_name: p.file.name,
+            mime_type: p.file.type || "application/octet-stream",
+            size_bytes: p.file.size,
+          }))
+        } catch {
+          toast.error("تعذر تجهيز المرفقات")
           return
         }
-
-        await Promise.all(
-          sign.data.map((slot, i) =>
-            uploadChatAttachmentViaSignedToken({
-              storagePath: slot.path,
-              token: slot.token,
-              file: pending[i]!.file,
-            })
-          )
-        )
-
-        attachments = pending.map((p, i) => ({
-          kind: p.kind,
-          storage_path: sign.data[i]!.path,
-          file_name: p.file.name,
-          mime_type: p.file.type || "application/octet-stream",
-          size_bytes: p.file.size,
-        }))
       }
 
-      const result = await onSend(t, attachments)
-      if (!result.success) {
-        toast.error(result.error)
-        return
+      try {
+        sendMutation.mutate({ text: t, attachments })
+      } catch {
+        toast.error("تعذر الإرسال")
       }
-      setText("")
-      clearPending()
-    } catch {
-      toast.error("تعذر الإرسال")
     } finally {
-      setBusy(false)
+      setPreparing(false)
     }
   }
 

@@ -1,14 +1,19 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { Input } from '@/components/ui/input'
-import { Button } from '@/components/ui/button'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Switch } from '@/components/ui/switch'
-import { Label } from '@/components/ui/label'
+import { useQuery } from '@tanstack/react-query'
+import { Search, FileText, Grid, List } from 'lucide-react'
+
+import { getPdfs } from '@/actions/pdfs'
 import { PDFCard } from '@/components/student/materials/pdf-card'
 import { EmptyState } from '@/components/shared/feedback/empty-state'
-import { Search, FileText, Grid, List } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { queryKeys } from '@/lib/query-keys'
+import { materialsWithPlaceholderStatus } from '@/lib/student-catalog-merge'
 import type { MaterialWithStatus, PDFMaterial } from '@/types'
 
 type CategoryFilter = 'all' | PDFMaterial['category']
@@ -23,7 +28,22 @@ const categories: { value: CategoryFilter; label: string }[] = [
   { value: 'ملخصات', label: 'ملخصات' },
 ]
 
-export function MaterialsContent({ initialMaterials }: { initialMaterials: MaterialWithStatus[] }) {
+export function MaterialsContent() {
+  const { data: initialMaterials = [] } = useQuery({
+    queryKey: queryKeys.studentMaterials(),
+    queryFn: async (): Promise<MaterialWithStatus[]> => {
+      try {
+        const res = await getPdfs()
+        if (!res.success) {
+          throw new Error(res.error)
+        }
+        return materialsWithPlaceholderStatus(res.data)
+      } catch (e) {
+        throw e instanceof Error ? e : new Error('فشل تحميل الملفات')
+      }
+    },
+  })
+
   const [searchQuery, setSearchQuery] = useState('')
   const [category, setCategory] = useState<CategoryFilter>('all')
   const [viewMode, setViewMode] = useState<ViewMode>('grid')

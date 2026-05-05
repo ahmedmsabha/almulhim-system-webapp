@@ -99,7 +99,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ materialId: st
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
-        "Cache-Control": "private, no-store",
+        "Cache-Control": "private, max-age=600",
         /** اسم ASCII بسيط حتى لا يفسِّر بعض العملاء سطر العنوان بحروف %-encode */
         "Content-Disposition": 'inline; filename="document.pdf"',
       },

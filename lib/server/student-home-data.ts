@@ -16,28 +16,14 @@ import type {
   MaterialWithStatus,
   PDFMaterial,
   Subscription,
-  VideoLesson,
   WatchProgress,
 } from "@/types"
+import {
+  materialsWithPlaceholderStatus,
+  mergeLessonsWithProgress,
+} from "@/lib/student-catalog-merge"
 
-export function mergeLessonsWithProgress(
-  lessons: VideoLesson[],
-  progress: WatchProgress[]
-): LessonWithProgress[] {
-  const byLesson = new Map(progress.map((p) => [p.lesson_id, p]))
-  return lessons.map((l) => ({
-    ...l,
-    watch_progress: byLesson.get(l.id),
-    download_status: "not_downloaded" as const,
-  }))
-}
-
-export function materialsWithPlaceholderStatus(pdfs: PDFMaterial[]): MaterialWithStatus[] {
-  return pdfs.map((m) => ({
-    ...m,
-    download_status: "not_downloaded" as const,
-  }))
-}
+export { mergeLessonsWithProgress, materialsWithPlaceholderStatus }
 
 export type StudentHomePayload = {
   lessonsWithProgress: LessonWithProgress[]

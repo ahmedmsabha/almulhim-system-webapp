@@ -101,7 +101,7 @@ Request → proxy → refresh JWT cookies → continue
 
 **لا تضف** منطق أدوار هنا. كل بوابات الصلاحيات في تخطيطات المسارات.
 
-> **Turbopack**: في `next.config.mjs` يُضبَط `turbopack.root` على مجلد المشروع لتفادي تحذير «multiple lockfiles» عند وجود `pnpm-lock.yaml` في مجلد أب.
+> **Turbopack**: في `next.config.mjs` يُضبَط `turbopack.root` على مجلد المشروع لتفادي تحذير «multiple lockfiles» عند وجود ملف قفل (`package-lock.json` أو غيره) في مجلد أب.
 
 ## 5. Auth & Profile Flow
 

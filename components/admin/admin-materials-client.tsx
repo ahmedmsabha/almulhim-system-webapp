@@ -1,6 +1,7 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -43,6 +44,7 @@ import {
 import { AdminUploadOverlay } from "@/components/admin/admin-upload-overlay"
 import { uploadMaterialsPdfViaSignedToken } from "@/lib/client/admin-upload-xhr"
 import { PdfEmbedViewer } from "@/components/shared/media/pdf-embed-viewer"
+import { queryKeys } from "@/lib/query-keys"
 import type { PDFMaterial } from "@/types"
 
 function isPdfFile(f: File) {
@@ -65,7 +67,110 @@ export function AdminMaterialsClient({
   initialMaterials: PDFMaterial[]
   autoOpenCreate?: boolean
 }) {
-  const [materials, setMaterials] = useState(initialMaterials)
+  const queryClient = useQueryClient()
+
+  const invalidateMaterials = useCallback(async () => {
+    try {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.adminMaterials() })
+    } catch {
+      /* ignore */
+    }
+  }, [queryClient])
+
+  const { data: materials = initialMaterials } = useQuery({
+    queryKey: queryKeys.adminMaterials(),
+    queryFn: async () => {
+      try {
+        const res = await adminListPdfs()
+        if (!res.success) {
+          throw new Error(res.error)
+        }
+        return res.data
+      } catch (e) {
+        throw e instanceof Error ? e : new Error("فشل تحميل الملفات")
+      }
+    },
+    initialData: initialMaterials,
+  })
+
+  const togglePublishMutation = useMutation({
+    mutationFn: async ({ id, isPublished }: { id: string; isPublished: boolean }) => {
+      try {
+        const res = await adminUpdatePdf(id, { is_published: !isPublished })
+        if (!res.success) {
+          throw new Error(res.error)
+        }
+        return res.data
+      } catch (e) {
+        throw e instanceof Error ? e : new Error("فشل التحديث")
+      }
+    },
+    onSuccess: () => {
+      toast.success("تم تحديث حالة النشر")
+    },
+    onError: (err: Error) => {
+      toast.error(err.message)
+    },
+    onSettled: invalidateMaterials,
+  })
+
+  const deletePdfMutation = useMutation({
+    mutationFn: async (id: string) => {
+      try {
+        const res = await adminRemovePdf(id)
+        if (!res.success) {
+          throw new Error(res.error)
+        }
+        return res.data
+      } catch (e) {
+        throw e instanceof Error ? e : new Error("فشل الحذف")
+      }
+    },
+    onSuccess: () => {
+      toast.success("تم حذف الملف")
+    },
+    onError: (err: Error) => {
+      toast.error(err.message)
+    },
+    onSettled: invalidateMaterials,
+  })
+
+  const createPdfMutation = useMutation({
+    mutationFn: async (input: Parameters<typeof adminCreatePdf>[0]) => {
+      try {
+        const res = await adminCreatePdf(input)
+        if (!res.success) {
+          throw new Error(res.error)
+        }
+        return res.data
+      } catch (e) {
+        throw e instanceof Error ? e : new Error("فشل الإنشاء")
+      }
+    },
+    onSettled: invalidateMaterials,
+  })
+
+  const updatePdfMutation = useMutation({
+    mutationFn: async ({
+      id,
+      patch,
+    }: {
+      id: string
+      patch: Parameters<typeof adminUpdatePdf>[1]
+    }) => {
+      try {
+        const res = await adminUpdatePdf(id, patch)
+        if (!res.success) {
+          throw new Error(res.error)
+        }
+        return res.data
+      } catch (e) {
+        throw e instanceof Error ? e : new Error("فشل الحفظ")
+      }
+    },
+    onSettled: invalidateMaterials,
+  })
+
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedCategory, setSelectedCategory] = useState<string>("all")
   const [showAddDialog, setShowAddDialog] = useState(false)
@@ -86,10 +191,6 @@ export function AdminMaterialsClient({
   } | null>(null)
   const [pdfDropOver, setPdfDropOver] = useState(false)
   const [pdfBlobPreviewUrl, setPdfBlobPreviewUrl] = useState<string | null>(null)
-
-  useEffect(() => {
-    setMaterials(initialMaterials)
-  }, [initialMaterials])
 
   useEffect(() => {
     if (!pendingPdfFile) {
@@ -118,15 +219,6 @@ export function AdminMaterialsClient({
     const u = [...new Set(materials.map((m) => m.category))]
     return u.length ? u : CATEGORIES
   }, [materials])
-
-  const refreshFromServer = async () => {
-    const res = await adminListPdfs()
-    if (res.success) {
-      setMaterials(res.data)
-      return
-    }
-    toast.error(res.error)
-  }
 
   const filteredMaterials = materials.filter((material) => {
     const matchesSearch = material.title.toLowerCase().includes(searchQuery.toLowerCase())
@@ -177,26 +269,6 @@ export function AdminMaterialsClient({
     setFormPages(String(m.page_count))
     setPendingPdfFile(null)
     setShowAddDialog(true)
-  }
-
-  const togglePublish = async (id: string, isPublished: boolean) => {
-    const res = await adminUpdatePdf(id, { is_published: !isPublished })
-    if (!res.success) {
-      toast.error(res.error)
-      return
-    }
-    toast.success("تم تحديث حالة النشر")
-    await refreshFromServer()
-  }
-
-  const deleteMaterial = async (id: string) => {
-    const res = await adminRemovePdf(id)
-    if (!res.success) {
-      toast.error(res.error)
-      return
-    }
-    toast.success("تم حذف الملف")
-    await refreshFromServer()
   }
 
   const formatFileSize = (bytes: number) => {
@@ -284,7 +356,11 @@ export function AdminMaterialsClient({
           if (pdfInputRef.current) pdfInputRef.current.value = ""
           setShowAddDialog(false)
           setEditing(null)
-          await refreshFromServer()
+          try {
+            await invalidateMaterials()
+          } catch {
+            /* ignore */
+          }
           return
         } catch (err) {
           toast.error(err instanceof Error ? err.message : "فشل الرفع")
@@ -301,39 +377,43 @@ export function AdminMaterialsClient({
         return
       }
 
-      if (editing) {
-        const res = await adminUpdatePdf(editing.id, {
-          title: formTitle.trim(),
-          description: formDesc || null,
-          category: formCategory,
-          file_url: formUrl.trim() || null,
-          file_size: fileSize,
-          page_count: pageCount,
-        })
-        if (!res.success) {
-          toast.error(res.error)
-          return
+      try {
+        if (editing) {
+          await updatePdfMutation.mutateAsync({
+            id: editing.id,
+            patch: {
+              title: formTitle.trim(),
+              description: formDesc || null,
+              category: formCategory,
+              file_url: formUrl.trim() || null,
+              file_size: fileSize,
+              page_count: pageCount,
+            },
+          })
+          toast.success("تم حفظ التعديلات")
+        } else {
+          await createPdfMutation.mutateAsync({
+            title: formTitle.trim(),
+            description: formDesc || null,
+            category: formCategory,
+            file_url: formUrl.trim() || null,
+            file_size: fileSize,
+            page_count: pageCount,
+            is_published: true,
+          })
+          toast.success("تمت إضافة الملف")
         }
-        toast.success("تم حفظ التعديلات")
-      } else {
-        const res = await adminCreatePdf({
-          title: formTitle.trim(),
-          description: formDesc || null,
-          category: formCategory,
-          file_url: formUrl.trim() || null,
-          file_size: fileSize,
-          page_count: pageCount,
-          is_published: true,
-        })
-        if (!res.success) {
-          toast.error(res.error)
-          return
-        }
-        toast.success("تمت إضافة الملف")
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "فشل الحفظ")
+        return
       }
       setShowAddDialog(false)
       setEditing(null)
-      await refreshFromServer()
+      try {
+        await invalidateMaterials()
+      } catch {
+        /* ignore */
+      }
     } finally {
       setSaving(false)
     }
@@ -427,7 +507,12 @@ export function AdminMaterialsClient({
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
-                          onClick={() => void togglePublish(material.id, material.is_published)}
+                          onClick={() =>
+                            void togglePublishMutation.mutate({
+                              id: material.id,
+                              isPublished: material.is_published,
+                            })
+                          }
                         >
                           {material.is_published ?
                             <>
@@ -442,7 +527,7 @@ export function AdminMaterialsClient({
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           className="text-destructive"
-                          onClick={() => void deleteMaterial(material.id)}
+                          onClick={() => void deletePdfMutation.mutate(material.id)}
                         >
                           <Trash2 className="ml-2 h-4 w-4" />
                           حذف

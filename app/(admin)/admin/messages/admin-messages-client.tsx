@@ -12,7 +12,8 @@ import { ChatThread } from "@/components/chat/chat-thread"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
-import type { Conversation, Message, MessageAttachment } from "@/types"
+import { queryKeys } from "@/lib/query-keys"
+import type { Conversation, MessageAttachment } from "@/types"
 
 function convPreview(c: Conversation): string {
   const t = (c.last_message ?? "").trim().split("\n")[0] ?? ""
@@ -32,8 +33,6 @@ export function AdminMessagesClient({
   const [selectedId, setSelectedId] = useState<string | null>(
     initialConversations[0]?.id ?? null
   )
-  const [thread, setThread] = useState<Message[]>([])
-  const [loadingThread, setLoadingThread] = useState(false)
   const [search, setSearch] = useState("")
 
   const adminInitial = adminName.trim()[0] ?? "م"
@@ -43,29 +42,17 @@ export function AdminMessagesClient({
   }, [initialConversations])
 
   useEffect(() => {
-    if (!selectedId) {
-      setThread([])
-      return
-    }
-    setThread([])
-    let cancelled = false
-    setLoadingThread(true)
+    if (!selectedId) return
     void (async () => {
-      await markAdminConversationRead(selectedId)
-      const res = await loadAdminThread(selectedId)
-      if (!cancelled) {
-        if (res.success) setThread(res.data)
-        setLoadingThread(false)
+      try {
+        await markAdminConversationRead(selectedId)
         setConversations((prev) =>
-          prev.map((c) =>
-            c.id === selectedId ? { ...c, unread_count: 0 } : c
-          )
+          prev.map((c) => (c.id === selectedId ? { ...c, unread_count: 0 } : c))
         )
+      } catch {
+        /* ignore */
       }
     })()
-    return () => {
-      cancelled = true
-    }
   }, [selectedId])
 
   const filtered = conversations.filter((c) =>
@@ -75,6 +62,21 @@ export function AdminMessagesClient({
   )
 
   const selected = conversations.find((c) => c.id === selectedId) ?? null
+
+  const fetchMessages = useCallback(async () => {
+    if (!selectedId) {
+      throw new Error("لا محادثة محددة")
+    }
+    try {
+      const res = await loadAdminThread(selectedId)
+      if (!res.success) {
+        throw new Error(res.error)
+      }
+      return res.data
+    } catch (e) {
+      throw e instanceof Error ? e : new Error("فشل تحميل الرسائل")
+    }
+  }, [selectedId])
 
   const onSend = useCallback(
     async (content: string, attachments: MessageAttachment[]) =>
@@ -169,10 +171,6 @@ export function AdminMessagesClient({
               <Mail className="h-12 w-12 opacity-40" />
               <p>اختر محادثة من القائمة</p>
             </div>
-          : loadingThread ?
-            <div className="flex flex-1 items-center justify-center p-8 text-muted-foreground">
-              جاري تحميل الرسائل…
-            </div>
           : <ChatThread
               key={selected.id}
               conversationId={selected.id}
@@ -181,7 +179,9 @@ export function AdminMessagesClient({
               peerAvatarUrl={selected.student_avatar}
               viewerInitial={adminInitial}
               peerInitial={selected.student_name.trim()[0] ?? "ط"}
-              initialMessages={thread}
+              messagesQueryKey={queryKeys.adminConversation(selected.id)}
+              fetchMessages={fetchMessages}
+              senderRole="admin"
               onSend={onSend}
               markReadOnMount={markReadNoop}
             />

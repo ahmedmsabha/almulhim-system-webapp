@@ -1,18 +1,37 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { Input } from '@/components/ui/input'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useQuery } from '@tanstack/react-query'
+import Link from 'next/link'
+import { Search, PlayCircle, Download } from 'lucide-react'
+
+import { getStudentLessonsMergedAction } from '@/actions/student-catalog'
 import { LessonCard } from '@/components/student/lessons/lesson-card'
 import { EmptyState } from '@/components/shared/feedback/empty-state'
 import { Button } from '@/components/ui/button'
-import Link from 'next/link'
-import { Search, PlayCircle, Download } from 'lucide-react'
+import { Input } from '@/components/ui/input'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { queryKeys } from '@/lib/query-keys'
 import type { LessonWithProgress } from '@/types'
 
 type FilterType = 'all' | 'new' | 'incomplete' | 'downloaded'
 
-export function LessonsContent({ initialLessons }: { initialLessons: LessonWithProgress[] }) {
+export function LessonsContent() {
+  const { data: initialLessons = [] } = useQuery({
+    queryKey: queryKeys.studentLessons(),
+    queryFn: async (): Promise<LessonWithProgress[]> => {
+      try {
+        const res = await getStudentLessonsMergedAction()
+        if (!res.success) {
+          throw new Error(res.error)
+        }
+        return res.data
+      } catch (e) {
+        throw e instanceof Error ? e : new Error('فشل تحميل الدروس')
+      }
+    },
+  })
+
   const [searchQuery, setSearchQuery] = useState('')
   const [filter, setFilter] = useState<FilterType>('all')
 

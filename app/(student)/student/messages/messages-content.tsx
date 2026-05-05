@@ -2,11 +2,13 @@
 
 import { useCallback } from 'react'
 
-import { markAsRead, sendStudentMessage } from '@/actions/messages'
+import { getConversation, markAsRead, sendStudentMessage } from '@/actions/messages'
 import { ChatThread } from '@/components/chat/chat-thread'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import type { Message, MessageAttachment } from '@/types'
+import { queryKeys } from '@/lib/query-keys'
+
+import type { MessageAttachment } from '@/types'
 
 export function MessagesContent({
   conversationId,
@@ -14,19 +16,29 @@ export function MessagesContent({
   studentName,
   adminName,
   adminAvatarUrl,
-  initialMessages,
 }: {
   conversationId: string
   studentId: string
   studentName: string
   adminName: string
   adminAvatarUrl: string | null
-  initialMessages: Message[]
 }) {
   const studentInitial = studentName.trim()[0] ?? '?'
   const adminInitial = adminName.trim()[0] ?? 'م'
 
   const markReadOnMount = useCallback(() => markAsRead(conversationId), [conversationId])
+
+  const fetchMessages = useCallback(async () => {
+    try {
+      const res = await getConversation(conversationId)
+      if (!res.success) {
+        throw new Error(res.error)
+      }
+      return res.data
+    } catch (e) {
+      throw e instanceof Error ? e : new Error('فشل تحميل الرسائل')
+    }
+  }, [conversationId])
 
   const onSend = useCallback(
     (content: string, attachments: MessageAttachment[]) =>
@@ -52,7 +64,9 @@ export function MessagesContent({
             peerAvatarUrl={adminAvatarUrl}
             viewerInitial={studentInitial}
             peerInitial={adminInitial}
-            initialMessages={initialMessages}
+            messagesQueryKey={queryKeys.studentMessages(conversationId)}
+            fetchMessages={fetchMessages}
+            senderRole="student"
             onSend={onSend}
             markReadOnMount={markReadOnMount}
           />

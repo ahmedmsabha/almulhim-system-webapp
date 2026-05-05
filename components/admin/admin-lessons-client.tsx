@@ -1,7 +1,7 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
-import { useRouter } from "next/navigation"
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -47,6 +47,7 @@ import {
 import { AdminUploadOverlay } from "@/components/admin/admin-upload-overlay"
 import { collectFilesWithRelativePathsFromDrop } from "@/lib/client/collect-files-from-data-transfer"
 import { xhrPutBlob } from "@/lib/client/admin-upload-xhr"
+import { queryKeys } from "@/lib/query-keys"
 import type { VideoLesson } from "@/types"
 
 function normalizeRelativePath(raw: string): string {
@@ -85,8 +86,110 @@ export function AdminLessonsClient({
   autoOpenCreate?: boolean
   enableR2FolderUpload?: boolean
 }) {
-  const router = useRouter()
-  const [lessons, setLessons] = useState(initialLessons)
+  const queryClient = useQueryClient()
+
+  const invalidateLessons = useCallback(async () => {
+    try {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
+    } catch {
+      /* ignore */
+    }
+  }, [queryClient])
+
+  const { data: lessons = initialLessons } = useQuery({
+    queryKey: queryKeys.adminLessons(),
+    queryFn: async () => {
+      try {
+        const res = await adminListVideos()
+        if (!res.success) {
+          throw new Error(res.error)
+        }
+        return res.data
+      } catch (e) {
+        throw e instanceof Error ? e : new Error("فشل تحميل الدروس")
+      }
+    },
+    initialData: initialLessons,
+  })
+
+  const togglePreviewMutation = useMutation({
+    mutationFn: async ({ id, isPreview }: { id: string; isPreview: boolean }) => {
+      try {
+        const res = await adminUpdateVideo(id, { is_preview: !isPreview })
+        if (!res.success) {
+          throw new Error(res.error)
+        }
+        return res.data
+      } catch (e) {
+        throw e instanceof Error ? e : new Error("فشل التحديث")
+      }
+    },
+    onSuccess: () => {
+      toast.success("تم تحديث نوع الدرس")
+    },
+    onError: (err: Error) => {
+      toast.error(err.message)
+    },
+    onSettled: invalidateLessons,
+  })
+
+  const deleteLessonMutation = useMutation({
+    mutationFn: async (id: string) => {
+      try {
+        const res = await adminRemoveVideo(id)
+        if (!res.success) {
+          throw new Error(res.error)
+        }
+        return res.data
+      } catch (e) {
+        throw e instanceof Error ? e : new Error("فشل الحذف")
+      }
+    },
+    onSuccess: () => {
+      toast.success("تم حذف الدرس")
+    },
+    onError: (err: Error) => {
+      toast.error(err.message)
+    },
+    onSettled: invalidateLessons,
+  })
+
+  const createLessonMutation = useMutation({
+    mutationFn: async (input: Parameters<typeof adminCreateVideo>[0]) => {
+      try {
+        const res = await adminCreateVideo(input)
+        if (!res.success) {
+          throw new Error(res.error)
+        }
+        return res.data
+      } catch (e) {
+        throw e instanceof Error ? e : new Error("فشل الإنشاء")
+      }
+    },
+    onSettled: invalidateLessons,
+  })
+
+  const updateLessonMutation = useMutation({
+    mutationFn: async ({
+      id,
+      patch,
+    }: {
+      id: string
+      patch: Parameters<typeof adminUpdateVideo>[1]
+    }) => {
+      try {
+        const res = await adminUpdateVideo(id, patch)
+        if (!res.success) {
+          throw new Error(res.error)
+        }
+        return res.data
+      } catch (e) {
+        throw e instanceof Error ? e : new Error("فشل الحفظ")
+      }
+    },
+    onSettled: invalidateLessons,
+  })
+
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedUnit, setSelectedUnit] = useState<string>("all")
   const [showAddDialog, setShowAddDialog] = useState(false)
@@ -107,10 +210,6 @@ export function AdminLessonsClient({
   const hlsBusy = hlsUploadOverlay !== null
   const hlsFolderInputRef = useRef<HTMLInputElement>(null)
   const [hlsDragOver, setHlsDragOver] = useState(false)
-
-  useEffect(() => {
-    setLessons(initialLessons)
-  }, [initialLessons])
 
   useEffect(() => {
     if (!autoOpenCreate) return
@@ -155,37 +254,11 @@ export function AdminLessonsClient({
     setShowAddDialog(true)
   }
 
-  const refreshFromServer = async () => {
-    const res = await adminListVideos()
-    if (res.success) setLessons(res.data)
-    router.refresh()
-  }
-
   const filteredLessons = lessons.filter((lesson) => {
     const matchesSearch = lesson.title.toLowerCase().includes(searchQuery.toLowerCase())
     const matchesUnit = selectedUnit === "all" || lesson.unit === selectedUnit
     return matchesSearch && matchesUnit
   })
-
-  const toggleLessonAccess = async (id: string, isPreview: boolean) => {
-    const res = await adminUpdateVideo(id, { is_preview: !isPreview })
-    if (!res.success) {
-      toast.error(res.error)
-      return
-    }
-    toast.success("تم تحديث نوع الدرس")
-    await refreshFromServer()
-  }
-
-  const deleteLesson = async (id: string) => {
-    const res = await adminRemoveVideo(id)
-    if (!res.success) {
-      toast.error(res.error)
-      return
-    }
-    toast.success("تم حذف الدرس")
-    await refreshFromServer()
-  }
 
   const runHlsFolderUpload = async (list: File[]) => {
     const lessonId = editingLesson?.id
@@ -281,7 +354,11 @@ export function AdminLessonsClient({
 
       toast.success("تم رفع المجلد وربط قائمة التشغيل بالدرس")
       setFormHlsUrl(fin.data?.hls_url ?? "")
-      await refreshFromServer()
+      try {
+        await invalidateLessons()
+      } catch {
+        /* ignore */
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "فشل رفع المجلد")
     } finally {
@@ -321,22 +398,21 @@ export function AdminLessonsClient({
     setSaving(true)
     try {
       if (editingLesson) {
-        const res = await adminUpdateVideo(editingLesson.id, {
-          title: formTitle.trim(),
-          description: formDesc,
-          hls_url: formHlsUrl.trim() || null,
-          youtube_id: formYoutubeId.trim() || null,
-          unit: formUnit.trim() || "عام",
-          duration: durationSec,
-          is_preview: formPreview,
+        await updateLessonMutation.mutateAsync({
+          id: editingLesson.id,
+          patch: {
+            title: formTitle.trim(),
+            description: formDesc,
+            hls_url: formHlsUrl.trim() || null,
+            youtube_id: formYoutubeId.trim() || null,
+            unit: formUnit.trim() || "عام",
+            duration: durationSec,
+            is_preview: formPreview,
+          },
         })
-        if (!res.success) {
-          toast.error(res.error)
-          return
-        }
         toast.success("تم حفظ التعديلات")
       } else {
-        const res = await adminCreateVideo({
+        const created = await createLessonMutation.mutateAsync({
           title: formTitle.trim(),
           description: formDesc,
           hls_url: formHlsUrl.trim() || null,
@@ -346,24 +422,20 @@ export function AdminLessonsClient({
           is_preview: formPreview,
           is_published: true,
         })
-        if (!res.success) {
-          toast.error(res.error)
-          return
-        }
         toast.success(
           keepOpen ? "تمت إضافة الدرس — يمكنك رفع مجلد HLS من الأسفل دون إغلاق النافذة" : "تمت إضافة الدرس"
         )
-        if (keepOpen) {
-          setEditingLesson(res.data)
+        if (keepOpen && created) {
+          setEditingLesson(created)
         }
       }
-
-      await refreshFromServer()
 
       if (!keepOpen) {
         setShowAddDialog(false)
         setEditingLesson(null)
       }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "فشل الحفظ")
     } finally {
       setSaving(false)
     }
@@ -474,7 +546,12 @@ export function AdminLessonsClient({
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
-                      onClick={() => void toggleLessonAccess(lesson.id, lesson.is_preview)}
+                      onClick={() =>
+                        void togglePreviewMutation.mutate({
+                          id: lesson.id,
+                          isPreview: lesson.is_preview,
+                        })
+                      }
                     >
                       {lesson.is_preview ?
                         <>
@@ -489,7 +566,7 @@ export function AdminLessonsClient({
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       className="text-destructive"
-                      onClick={() => void deleteLesson(lesson.id)}
+                      onClick={() => void deleteLessonMutation.mutate(lesson.id)}
                     >
                       <Trash2 className="h-4 w-4 ml-2" />
                       حذف

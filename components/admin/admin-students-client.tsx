@@ -1,7 +1,7 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
+import { useCallback, useEffect, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -40,12 +40,14 @@ import {
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import type { DemoStudent, SubscriptionPlan } from "@/types"
+import { adminListDemoStudents } from "@/actions/admin-students"
 import { adminResetStudentDeviceBinding } from "@/actions/admin-device-binding"
 import {
   deactivateStudentSubscriptionAdmin,
   saveStudentSubscriptionAdmin,
 } from "@/actions/students"
 import { Spinner } from "@/components/ui/spinner"
+import { queryKeys } from "@/lib/query-keys"
 
 function addDaysToIsoDate(dateStr: string, days: number): string {
   const d = new Date(`${dateStr}T12:00:00Z`)
@@ -60,8 +62,83 @@ export function AdminStudentsClient({
   initialStudents: DemoStudent[]
   subscriptionPlans: SubscriptionPlan[]
 }) {
-  const router = useRouter()
-  const [students, setStudents] = useState<DemoStudent[]>(initialStudents)
+  const queryClient = useQueryClient()
+
+  const invalidateStudents = useCallback(async () => {
+    try {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.adminStudents() })
+    } catch {
+      /* ignore */
+    }
+  }, [queryClient])
+
+  const { data: students = initialStudents } = useQuery({
+    queryKey: queryKeys.adminStudents(),
+    queryFn: async () => {
+      try {
+        const res = await adminListDemoStudents()
+        if (!res.success) {
+          throw new Error(res.error)
+        }
+        return res.data
+      } catch (e) {
+        throw e instanceof Error ? e : new Error("فشل تحميل الطلاب")
+      }
+    },
+    initialData: initialStudents,
+  })
+
+  const saveSubscriptionMutation = useMutation({
+    mutationFn: async (input: Parameters<typeof saveStudentSubscriptionAdmin>[0]) => {
+      try {
+        const res = await saveStudentSubscriptionAdmin(input)
+        if (!res.success) {
+          throw new Error(res.error)
+        }
+        return res.data
+      } catch (e) {
+        throw e instanceof Error ? e : new Error("فشل الحفظ")
+      }
+    },
+    onSettled: invalidateStudents,
+  })
+
+  const deactivateSubscriptionMutation = useMutation({
+    mutationFn: async (input: Parameters<typeof deactivateStudentSubscriptionAdmin>[0]) => {
+      try {
+        const res = await deactivateStudentSubscriptionAdmin(input)
+        if (!res.success) {
+          throw new Error(res.error)
+        }
+        return res.data
+      } catch (e) {
+        throw e instanceof Error ? e : new Error("فشل الإلغاء")
+      }
+    },
+    onSettled: invalidateStudents,
+  })
+
+  const resetDeviceMutation = useMutation({
+    mutationFn: async (studentId: string) => {
+      try {
+        const res = await adminResetStudentDeviceBinding(studentId)
+        if (!res.success) {
+          throw new Error(res.error)
+        }
+        return res.data
+      } catch (e) {
+        throw e instanceof Error ? e : new Error("فشل إعادة ضبط الجهاز")
+      }
+    },
+    onSuccess: () => {
+      toast.success("تم إعادة ضبط الجهاز")
+    },
+    onError: (err: Error) => {
+      toast.error(err.message)
+    },
+    onSettled: invalidateStudents,
+  })
+
   const [searchQuery, setSearchQuery] = useState("")
   const [filterType, setFilterType] = useState<"all" | "active" | "inactive" | "premium">("all")
   const [selectedStudent, setSelectedStudent] = useState<DemoStudent | null>(null)
@@ -71,10 +148,6 @@ export function AdminStudentsClient({
   const [subEnd, setSubEnd] = useState("")
   const [subSaving, setSubSaving] = useState(false)
   const [showAddDialog, setShowAddDialog] = useState(false)
-
-  useEffect(() => {
-    setStudents(initialStudents)
-  }, [initialStudents])
 
   useEffect(() => {
     if (!subscriptionStudent || subscriptionPlans.length === 0) return
@@ -110,24 +183,21 @@ export function AdminStudentsClient({
     if (!subscriptionStudent) return
     setSubSaving(true)
     try {
-      const res = await saveStudentSubscriptionAdmin({
+      await saveSubscriptionMutation.mutateAsync({
         studentId: subscriptionStudent.id,
         subscriptionRecordId: subscriptionStudent.subscriptionRecordId ?? null,
         planId: subPlanId,
         startDateIso: subStart,
         endDateIso: subEnd,
       })
-      if (!res.success) {
-        toast.error(res.error)
-        return
-      }
       toast.success(
         subscriptionStudent.subscriptionRecordId ?
           "تم حفظ تعديلات الاشتراك"
         : "تم تفعيل الاشتراك",
       )
       setSubscriptionStudent(null)
-      router.refresh()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "فشل الحفظ")
     } finally {
       setSubSaving(false)
     }
@@ -144,17 +214,14 @@ export function AdminStudentsClient({
     }
     setSubSaving(true)
     try {
-      const res = await deactivateStudentSubscriptionAdmin({
+      await deactivateSubscriptionMutation.mutateAsync({
         studentId: subscriptionStudent.id,
         subscriptionRecordId: subscriptionStudent.subscriptionRecordId,
       })
-      if (!res.success) {
-        toast.error(res.error)
-        return
-      }
       toast.success("تم إلغاء الاشتراك")
       setSubscriptionStudent(null)
-      router.refresh()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "فشل الإلغاء")
     } finally {
       setSubSaving(false)
     }
@@ -267,7 +334,7 @@ export function AdminStudentsClient({
                             تعديل الاشتراك
                           </DropdownMenuItem>
                           <DropdownMenuItem
-                            onClick={async () => {
+                            onClick={() => {
                               if (
                                 !window.confirm(
                                   "سيتمكن الطالب من ربط حسابه بجهاز جديد عند تسجيل الدخول التالي. المتابعة؟"
@@ -275,13 +342,7 @@ export function AdminStudentsClient({
                               ) {
                                 return
                               }
-                              const res = await adminResetStudentDeviceBinding(student.id)
-                              if (!res.success) {
-                                toast.error(res.error)
-                                return
-                              }
-                              toast.success("تم إعادة ضبط الجهاز")
-                              router.refresh()
+                              resetDeviceMutation.mutate(student.id)
                             }}
                           >
                             <Smartphone className="ml-2 h-4 w-4" />
@@ -339,7 +400,20 @@ export function AdminStudentsClient({
           <Card className="border-0 shadow-sm">
             <CardContent className="p-8 text-center">
               <p className="text-muted-foreground">لا يوجد طلاب مطابقين للبحث</p>
-              <Button type="button" variant="link" className="mt-2" onClick={() => router.refresh()}>
+              <Button
+                type="button"
+                variant="link"
+                className="mt-2"
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      await invalidateStudents()
+                    } catch {
+                      /* ignore */
+                    }
+                  })()
+                }}
+              >
                 تحديث القائمة
               </Button>
             </CardContent>

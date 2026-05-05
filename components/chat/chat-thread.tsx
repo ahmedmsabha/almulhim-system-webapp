@@ -1,6 +1,8 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import Link from "next/link"
 import { CheckCircle, Clock } from "lucide-react"
 
 import { ChatComposer } from "@/components/chat/chat-composer"
@@ -10,7 +12,6 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import type { Message, MessageAttachment } from "@/types"
 import type { ActionResult } from "@/types/api"
-import Link from "next/link"
 
 function formatMessageTime(dateString: string): string {
   const date = new Date(dateString)
@@ -98,7 +99,9 @@ export function ChatThread({
   peerAvatarUrl,
   viewerInitial,
   peerInitial,
-  initialMessages,
+  messagesQueryKey,
+  fetchMessages,
+  senderRole,
   onSend,
   markReadOnMount,
   composerDisabled,
@@ -109,42 +112,47 @@ export function ChatThread({
   peerAvatarUrl: string | null
   viewerInitial: string
   peerInitial: string
-  initialMessages: Message[]
+  messagesQueryKey: readonly unknown[]
+  fetchMessages: () => Promise<Message[]>
+  senderRole: "student" | "admin"
   onSend: (text: string, attachments: MessageAttachment[]) => Promise<ActionResult<Message>>
   markReadOnMount: () => Promise<unknown>
   composerDisabled?: boolean
 }) {
-  const [messages, setMessages] = useState(initialMessages)
+  const queryClient = useQueryClient()
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    setMessages(initialMessages)
-  }, [initialMessages])
+  const { data: messages = [], isPending } = useQuery({
+    queryKey: messagesQueryKey,
+    queryFn: async () => {
+      try {
+        return await fetchMessages()
+      } catch (e) {
+        throw e instanceof Error ? e : new Error("فشل تحميل الرسائل")
+      }
+    },
+  })
 
   useEffect(() => {
     void markReadOnMount()
   }, [conversationId, markReadOnMount])
 
-  const appendIncoming = useCallback((m: Message) => {
-    setMessages((prev) => {
-      if (prev.some((x) => x.id === m.id)) return prev
-      return [...prev, m]
-    })
-  }, [])
+  const appendIncoming = useCallback(
+    (m: Message) => {
+      queryClient.setQueryData<Message[]>(messagesQueryKey, (prev) => {
+        const list = prev ?? []
+        if (list.some((x) => x.id === m.id)) return list
+        return [...list, m]
+      })
+    },
+    [messagesQueryKey, queryClient]
+  )
 
   useConversationMessagesRealtime(conversationId, appendIncoming)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
-
-  const handleSend = async (text: string, attachments: MessageAttachment[]) =>
-    onSend(text, attachments).then((res) => {
-      if (res.success) {
-        appendIncoming(res.data)
-      }
-      return res
-    })
 
   return (
     <div className="flex h-full min-h-[50vh] flex-col">
@@ -160,59 +168,67 @@ export function ChatThread({
       </div>
 
       <ScrollArea className="flex-1 p-4">
-        <div className="space-y-4">
-          {messages.map((message) => {
-            const isViewer = message.sender_id === viewerUserId
-            return (
-              <div
-                key={message.id}
-                className={cn("flex gap-3", isViewer && "flex-row-reverse")}
-              >
-                <Avatar className="h-8 w-8 flex-shrink-0">
-                  <AvatarFallback>{isViewer ? viewerInitial : peerInitial}</AvatarFallback>
-                </Avatar>
+        {isPending && messages.length === 0 ?
+          <div className="flex justify-center p-8 text-sm text-muted-foreground">
+            جاري تحميل الرسائل…
+          </div>
+        : <div className="space-y-4">
+            {messages.map((message) => {
+              const isViewer = message.sender_id === viewerUserId
+              return (
                 <div
-                  className={cn(
-                    "max-w-[85%] rounded-2xl px-4 py-2 sm:max-w-[70%]",
-                    isViewer ?
-                      "bg-primary text-primary-foreground rounded-br-sm"
-                    : "bg-muted rounded-bl-sm"
-                  )}
+                  key={message.id}
+                  className={cn("flex gap-3", isViewer && "flex-row-reverse")}
                 >
-                  {message.content ?
-                    <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</p>
-                  : null}
-                  {message.attachments.length > 0 && (
-                    <div className={cn(message.content && "mt-2")}>
-                      <AttachmentGrid items={message.attachments} />
-                    </div>
-                  )}
+                  <Avatar className="h-8 w-8 flex-shrink-0">
+                    <AvatarFallback>{isViewer ? viewerInitial : peerInitial}</AvatarFallback>
+                  </Avatar>
                   <div
                     className={cn(
-                      "mt-1 flex items-center gap-1 text-xs",
+                      "max-w-[85%] rounded-2xl px-4 py-2 sm:max-w-[70%]",
                       isViewer ?
-                        "justify-start text-primary-foreground/70"
-                      : "justify-end text-muted-foreground"
+                        "bg-primary text-primary-foreground rounded-br-sm"
+                      : "bg-muted rounded-bl-sm"
                     )}
                   >
-                    <span>{formatMessageTime(message.created_at)}</span>
-                    {isViewer &&
-                      (message.is_read ?
-                        <CheckCircle className="h-3 w-3" />
-                      : <Clock className="h-3 w-3" />)}
+                    {message.content ?
+                      <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</p>
+                    : null}
+                    {message.attachments.length > 0 && (
+                      <div className={cn(message.content && "mt-2")}>
+                        <AttachmentGrid items={message.attachments} />
+                      </div>
+                    )}
+                    <div
+                      className={cn(
+                        "mt-1 flex items-center gap-1 text-xs",
+                        isViewer ?
+                          "justify-start text-primary-foreground/70"
+                        : "justify-end text-muted-foreground"
+                      )}
+                    >
+                      <span>{formatMessageTime(message.created_at)}</span>
+                      {isViewer &&
+                        (message.is_read ?
+                          <CheckCircle className="h-3 w-3" />
+                        : <Clock className="h-3 w-3" />)}
+                    </div>
                   </div>
                 </div>
-              </div>
-            )
-          })}
-          <div ref={bottomRef} />
-        </div>
+              )
+            })}
+            <div ref={bottomRef} />
+          </div>
+        }
       </ScrollArea>
 
       <ChatComposer
         conversationId={conversationId}
+        viewerUserId={viewerUserId}
+        messagesQueryKey={messagesQueryKey}
+        senderRole={senderRole}
         disabled={composerDisabled}
-        onSend={handleSend}
+        onSend={onSend}
       />
     </div>
   )
