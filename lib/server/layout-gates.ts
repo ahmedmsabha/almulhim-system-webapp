@@ -33,7 +33,7 @@ export type StudentLayoutContext = {
   accessToken: string
 }
 
-const loadStudentLayoutContext = cache(async (): Promise<StudentLayoutContext> => {
+export const requireStudentLayoutContext = cache(async (): Promise<StudentLayoutContext> => {
   const supabase = await createClient()
   const {
     data: { user },
@@ -68,10 +68,6 @@ const loadStudentLayoutContext = cache(async (): Promise<StudentLayoutContext> =
   return { profile, subscription, subscriptionStatus, accessToken }
 })
 
-export async function requireStudentLayoutContext(): Promise<StudentLayoutContext> {
-  return loadStudentLayoutContext()
-}
-
 /** صفحات الدروس والملفات وغيرها — يقتصر الوصول على اشتراك فعّال (يشمل «ينتهي قريباً»). */
 export async function requireStudentContentAccess(): Promise<StudentLayoutContext> {
   const ctx = await requireStudentLayoutContext()
@@ -81,7 +77,7 @@ export async function requireStudentContentAccess(): Promise<StudentLayoutContex
   return ctx
 }
 
-const loadAdminLayoutContext = cache(async (): Promise<{ profile: Profile }> => {
+export const requireAdminLayoutContext = cache(async (): Promise<{ profile: Profile }> => {
   const supabase = await createClient()
   const {
     data: { user },
@@ -113,7 +109,3 @@ const loadAdminLayoutContext = cache(async (): Promise<{ profile: Profile }> => 
 
   return { profile }
 })
-
-export async function requireAdminLayoutContext(): Promise<{ profile: Profile }> {
-  return loadAdminLayoutContext()
-}

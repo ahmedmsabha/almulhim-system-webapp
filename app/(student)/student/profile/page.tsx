@@ -9,7 +9,9 @@ export const metadata: Metadata = {
 }
 
 export default async function ProfilePage() {
-  const { profile, subscription, subscriptionStatus } = await requireStudentLayoutContext()
+  const { profile, subscription, subscriptionStatus } =
+    await requireStudentLayoutContext()
+
   return (
     <StudentProfileView
       profile={profile}

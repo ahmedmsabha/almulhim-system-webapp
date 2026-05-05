@@ -4,8 +4,8 @@ import { listSubscriptionPlansAdmin } from "@/lib/db/queries/subscription-plans-
 import { requireAdminLayoutContext } from "@/lib/server/layout-gates"
 
 export default async function SettingsPage() {
-  const { profile } = await requireAdminLayoutContext()
-  const [plans, appSetting] = await Promise.all([
+  const [{ profile }, plans, appSetting] = await Promise.all([
+    requireAdminLayoutContext(),
     listSubscriptionPlansAdmin(),
     getAppSetting(),
   ])

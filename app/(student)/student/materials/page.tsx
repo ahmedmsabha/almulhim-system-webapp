@@ -10,7 +10,7 @@ import { materialsWithPlaceholderStatus } from '@/lib/student-catalog-merge'
 export const revalidate = 60
 
 export default async function MaterialsPage() {
-  const { accessToken } = await requireStudentContentAccess()
+  const ctx = await requireStudentContentAccess()
   const queryClient = getServerQueryClient()
 
   try {
@@ -18,7 +18,7 @@ export default async function MaterialsPage() {
       queryKey: queryKeys.studentMaterials(),
       queryFn: async () => {
         try {
-          const pdfs = await getSubscriberPdfs(accessToken)
+          const pdfs = await getSubscriberPdfs(ctx.accessToken)
           return materialsWithPlaceholderStatus(pdfs)
         } catch (e) {
           throw e instanceof Error ? e : new Error('prefetch materials failed')

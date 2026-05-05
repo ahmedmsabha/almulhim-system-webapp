@@ -16,7 +16,7 @@ export const metadata: Metadata = {
 export const revalidate = 60
 
 export default async function AnnouncementsPage() {
-  const { accessToken } = await requireStudentContentAccess()
+  const ctx = await requireStudentContentAccess()
   const queryClient = getServerQueryClient()
 
   try {
@@ -24,7 +24,9 @@ export default async function AnnouncementsPage() {
       queryKey: queryKeys.studentAnnouncements(),
       queryFn: async () => {
         try {
-          const list = await fetchAnnouncementsFromDb(accessToken, { is_published: true })
+          const list = await fetchAnnouncementsFromDb(ctx.accessToken, {
+            is_published: true,
+          })
           return sortAnnouncementsForStudentUi(list)
         } catch (e) {
           throw e instanceof Error ? e : new Error('prefetch announcements failed')

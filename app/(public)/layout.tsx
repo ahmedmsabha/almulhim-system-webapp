@@ -6,9 +6,8 @@ import { BRAND } from '@/lib/config'
 import type { MergedTeacherContact } from '@/lib/db/queries/site-settings'
 import { getPublicSiteSnapshot } from '@/lib/server/public-site-snapshot'
 
-/** بيانات المعلِّم والإحصاءات من القاعدة — لا تجميد HTML عند البناء ولا كاش مسار طويل */
-export const dynamic = 'force-dynamic'
-export const revalidate = 0
+/** الصفحات العامة — إعادة توليد كل ساعة لتقليل ضغط قاعدة البيانات مع بيانات حديثة كافية */
+export const revalidate = 3600
 
 function Header({ teacherDisplayName }: { teacherDisplayName: string }) {
   return (
