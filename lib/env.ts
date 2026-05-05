@@ -3,6 +3,9 @@ import { z } from "zod"
 const dbMissingMessage = (key: string) =>
   `${key} is missing or empty. في لوحة تحكم Supabase، افتح مشروعك → Settings → Database → Connection strings. استخدم Session mode لـ DATABASE_URL عند الحاجة، و Pooler (6543) لـ DATABASE_URL_POOLER إن وُجد؛ وإلا يُعاد استخدام DATABASE_URL.`
 
+// مفاتيح VAPID لـ Web Push (الخادم + العميل العام فقط):
+// npx web-push generate-vapid-keys
+// ثم أضف القيم في `.env.local` وفي متغيرات بيئة Vercel (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `NEXT_PUBLIC_VAPID_PUBLIC_KEY`).
 const envSchema = z
   .object({
     NODE_ENV: z.enum(["development", "production", "test"]).optional(),
@@ -11,6 +14,9 @@ const envSchema = z
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z.string().min(1).optional(),
     DATABASE_URL: z.string().min(1),
     DATABASE_URL_POOLER: z.string().min(1).optional(),
+    VAPID_PUBLIC_KEY: z.string().min(1),
+    VAPID_PRIVATE_KEY: z.string().min(1),
+    NEXT_PUBLIC_VAPID_PUBLIC_KEY: z.string().min(1),
   })
   .superRefine((data, ctx) => {
     const hasAnon =

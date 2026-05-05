@@ -223,6 +223,18 @@ export const studentDeviceBindings = pgTable("student_device_bindings", {
   updated_at: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 })
 
+/** اشتراكات Web Push لكل جهاز؛ `endpoint` فريد عالمياً من مزوّد الدفع. */
+export const pushSubscriptions = pgTable("push_subscriptions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  user_id: uuid("user_id")
+    .notNull()
+    .references(() => profiles.id, { onDelete: "cascade" }),
+  endpoint: text("endpoint").notNull().unique(),
+  p256dh: text("p256dh").notNull(),
+  auth: text("auth").notNull(),
+  created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+})
+
 export type ProfileRow = typeof profiles.$inferSelect
 export type NewProfileRow = typeof profiles.$inferInsert
 export type SubscriptionPlanRow = typeof subscriptionPlans.$inferSelect
@@ -250,4 +262,6 @@ export type NewSubscriptionLeadRow = typeof subscriptionLeads.$inferInsert
 export type CouponRow = typeof coupons.$inferSelect
 export type NewCoupon = typeof coupons.$inferInsert
 export type StudentDeviceBindingRow = typeof studentDeviceBindings.$inferSelect
-export type NewStudentDeviceBinding = typeof studentDeviceBindings.$inferInsert
+export type NewStudentDeviceBindingRow = typeof studentDeviceBindings.$inferInsert
+export type PushSubscriptionRow = typeof pushSubscriptions.$inferSelect
+export type NewPushSubscriptionRow = typeof pushSubscriptions.$inferInsert

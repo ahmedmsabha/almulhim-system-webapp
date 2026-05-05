@@ -7,6 +7,7 @@ import { Progress } from '@/components/ui/progress'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { SubscriptionBadge } from '@/components/student/profile/subscription-badge'
 import { TeacherContactButtons } from '@/components/student/teacher-contact-buttons'
+import { PushNotificationToggle } from '@/components/PushNotificationToggle'
 import {
   User,
   Mail,
@@ -170,6 +171,23 @@ export function StudentProfileView({
               subscriptionStatus === 'none') && (
               <TeacherContactButtons layout="stack" className="w-full pt-1" />
             )}
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-3 border-border/70 shadow-sm">
+          <CardHeader className="border-b bg-muted/20">
+            <CardTitle className="text-lg font-bold">الإعدادات</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 pt-6">
+            <div>
+              <p className="text-sm font-semibold text-foreground">إشعارات المنصّة</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                تنبيهات فورية للإعلانات والرسائل وتذكيرات الاشتراك (على الأجهزة التي تدعم Web Push).
+              </p>
+              <div className="mt-4">
+                <PushNotificationToggle />
+              </div>
+            </div>
           </CardContent>
         </Card>
 

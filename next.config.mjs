@@ -42,6 +42,8 @@ const withPWA = withPWAInit({
   aggressiveFrontEndNavCaching: true,
   extendDefaultRuntimeCaching: true,
   workboxOptions: {
+    /** كود Service Worker الثابت (push / notificationclick) — لا يُستبدَل عند الـ precache rebuild */
+    importScripts: ['/sw-custom.js'],
     runtimeCaching: [
       /**
        * لوحة المعلم: لا تخزين في SW — بعد كل نشر تتبدّل معرّفات Server Actions؛ الكاش القديم يُظهر
