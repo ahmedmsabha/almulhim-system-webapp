@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 
 import { getConversation, markAsRead, sendStudentMessage } from '@/actions/messages'
 import { ChatThread } from '@/components/chat/chat-thread'
@@ -8,7 +9,13 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { queryKeys } from '@/lib/query-keys'
 
-import type { MessageAttachment } from '@/types'
+import type { Message, MessageAttachment } from '@/types'
+
+type SendVars = {
+  conversationId: string
+  content: string
+  attachments: MessageAttachment[]
+}
 
 export function MessagesContent({
   conversationId,
@@ -23,6 +30,7 @@ export function MessagesContent({
   adminName: string
   adminAvatarUrl: string | null
 }) {
+  const queryClient = useQueryClient()
   const studentInitial = studentName.trim()[0] ?? '?'
   const adminInitial = adminName.trim()[0] ?? 'م'
 
@@ -40,10 +48,83 @@ export function MessagesContent({
     }
   }, [conversationId])
 
+  const sendMutation = useMutation({
+    mutationFn: async (variables: SendVars) => {
+      try {
+        const res = await sendStudentMessage(variables)
+        if (!res.success) {
+          throw new Error(res.error)
+        }
+        return res.data
+      } catch (e) {
+        throw e instanceof Error ? e : new Error('فشل الإرسال')
+      }
+    },
+    onMutate: async (variables) => {
+      try {
+        await queryClient.cancelQueries({
+          queryKey: queryKeys.studentMessages(variables.conversationId),
+        })
+      } catch {
+        /* ignore */
+      }
+      const key = queryKeys.studentMessages(variables.conversationId)
+      const snapshot = queryClient.getQueryData<Message[]>(key)
+      const optimistic: Message = {
+        id: `temp-${Date.now()}`,
+        conversation_id: variables.conversationId,
+        sender_id: studentId,
+        sender_role: 'student',
+        content: variables.content,
+        attachments: variables.attachments.map((a) => ({ ...a })),
+        is_read: false,
+        created_at: new Date().toISOString(),
+      }
+      queryClient.setQueryData<Message[]>(key, (old: Message[] = []) => [...old, optimistic])
+      return { snapshot }
+    },
+    onError: (_err, _vars, context) => {
+      try {
+        if (context?.snapshot !== undefined) {
+          queryClient.setQueryData(
+            queryKeys.studentMessages(conversationId),
+            context.snapshot,
+          )
+        }
+      } catch {
+        /* ignore */
+      }
+    },
+    onSettled: async (_data, _err, variables) => {
+      try {
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.studentMessages(variables.conversationId),
+        })
+      } catch {
+        /* ignore */
+      }
+    },
+  })
+
   const onSend = useCallback(
-    (content: string, attachments: MessageAttachment[]) =>
-      sendStudentMessage({ conversationId, content, attachments }),
-    [conversationId]
+    async (content: string, attachments: MessageAttachment[]) => {
+      try {
+        const data = await sendMutation.mutateAsync({
+          conversationId,
+          content,
+          attachments,
+        })
+        return { success: true as const, data }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'فشل الإرسال'
+        return {
+          success: false as const,
+          error: msg,
+          code: 'UNKNOWN' as const,
+        }
+      }
+    },
+    [conversationId, sendMutation],
   )
 
   return (

@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Mail, Search, User } from "lucide-react"
 
 import {
@@ -13,7 +14,13 @@ import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { queryKeys } from "@/lib/query-keys"
-import type { Conversation, MessageAttachment } from "@/types"
+import type { Conversation, Message, MessageAttachment } from "@/types"
+
+type AdminSendVars = {
+  conversationId: string
+  content: string
+  attachments: MessageAttachment[]
+}
 
 function convPreview(c: Conversation): string {
   const t = (c.last_message ?? "").trim().split("\n")[0] ?? ""
@@ -36,6 +43,70 @@ export function AdminMessagesClient({
   const [search, setSearch] = useState("")
 
   const adminInitial = adminName.trim()[0] ?? "م"
+
+  const queryClient = useQueryClient()
+
+  const sendMutation = useMutation({
+    mutationFn: async (variables: AdminSendVars) => {
+      try {
+        const res = await sendAdminThreadMessage({
+          conversationId: variables.conversationId,
+          content: variables.content,
+          attachments: variables.attachments,
+        })
+        if (!res.success) {
+          throw new Error(res.error)
+        }
+        return res.data
+      } catch (e) {
+        throw e instanceof Error ? e : new Error("فشل الإرسال")
+      }
+    },
+    onMutate: async (variables) => {
+      try {
+        await queryClient.cancelQueries({
+          queryKey: queryKeys.adminConversation(variables.conversationId),
+        })
+      } catch {
+        /* ignore */
+      }
+      const key = queryKeys.adminConversation(variables.conversationId)
+      const snapshot = queryClient.getQueryData<Message[]>(key)
+      const optimistic: Message = {
+        id: `temp-${Date.now()}`,
+        conversation_id: variables.conversationId,
+        sender_id: adminId,
+        sender_role: "admin",
+        content: variables.content,
+        attachments: variables.attachments.map((a) => ({ ...a })),
+        is_read: false,
+        created_at: new Date().toISOString(),
+      }
+      queryClient.setQueryData<Message[]>(key, (old: Message[] = []) => [...old, optimistic])
+      return { snapshot }
+    },
+    onError: (_err, variables, context) => {
+      try {
+        if (context?.snapshot !== undefined) {
+          queryClient.setQueryData(
+            queryKeys.adminConversation(variables.conversationId),
+            context.snapshot,
+          )
+        }
+      } catch {
+        /* ignore */
+      }
+    },
+    onSettled: async (_data, _err, variables) => {
+      try {
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.adminConversation(variables.conversationId),
+        })
+      } catch {
+        /* ignore */
+      }
+    },
+  })
 
   useEffect(() => {
     setConversations(initialConversations)
@@ -79,13 +150,31 @@ export function AdminMessagesClient({
   }, [selectedId])
 
   const onSend = useCallback(
-    async (content: string, attachments: MessageAttachment[]) =>
-      sendAdminThreadMessage({
-        conversationId: selectedId!,
-        content,
-        attachments,
-      }),
-    [selectedId]
+    async (content: string, attachments: MessageAttachment[]) => {
+      if (!selectedId) {
+        return {
+          success: false as const,
+          error: "لا محادثة محددة",
+          code: "UNKNOWN" as const,
+        }
+      }
+      try {
+        const data = await sendMutation.mutateAsync({
+          conversationId: selectedId,
+          content,
+          attachments,
+        })
+        return { success: true as const, data }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "فشل الإرسال"
+        return {
+          success: false as const,
+          error: msg,
+          code: "UNKNOWN" as const,
+        }
+      }
+    },
+    [selectedId, sendMutation],
   )
 
   const markReadNoop = useCallback(async () => Promise.resolve(), [])

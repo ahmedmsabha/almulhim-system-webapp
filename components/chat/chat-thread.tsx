@@ -224,9 +224,6 @@ export function ChatThread({
 
       <ChatComposer
         conversationId={conversationId}
-        viewerUserId={viewerUserId}
-        messagesQueryKey={messagesQueryKey}
-        senderRole={senderRole}
         disabled={composerDisabled}
         onSend={onSend}
       />

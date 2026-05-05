@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useRef, useState } from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation } from "@tanstack/react-query"
 import { FileImage, FileText, Loader2, Mic, Send, Square, X } from "lucide-react"
 
 import { requestChatAttachmentUploads } from "@/actions/chat-upload"
@@ -24,20 +24,13 @@ type SendFn = (
 
 export function ChatComposer({
   conversationId,
-  viewerUserId,
-  messagesQueryKey,
-  senderRole,
   disabled,
   onSend,
 }: {
   conversationId: string
-  viewerUserId: string
-  messagesQueryKey: readonly unknown[]
-  senderRole: "student" | "admin"
   disabled?: boolean
   onSend: SendFn
 }) {
-  const queryClient = useQueryClient()
   const [text, setText] = useState("")
   const [preparing, setPreparing] = useState(false)
   const [pending, setPending] = useState<
@@ -63,40 +56,6 @@ export function ChatComposer({
         throw e instanceof Error ? e : new Error("فشل الإرسال")
       }
     },
-    onMutate: async (vars) => {
-      try {
-        await queryClient.cancelQueries({ queryKey: messagesQueryKey })
-      } catch {
-        /* ignore */
-      }
-
-      const previousMessages = queryClient.getQueryData<Message[]>(messagesQueryKey)
-
-      const optimistic: Message = {
-        id: `temp-${Date.now()}`,
-        conversation_id: conversationId,
-        sender_id: viewerUserId,
-        sender_role: senderRole,
-        content: vars.text,
-        attachments: vars.attachments.map((a) => ({ ...a })),
-        is_read: false,
-        created_at: new Date().toISOString(),
-      }
-
-      queryClient.setQueryData<Message[]>(messagesQueryKey, (old) => [...(old ?? []), optimistic])
-
-      return { previousMessages }
-    },
-    onError: (_err, _vars, context) => {
-      try {
-        if (context?.previousMessages !== undefined) {
-          queryClient.setQueryData(messagesQueryKey, context.previousMessages)
-        }
-      } catch {
-        /* ignore */
-      }
-      toast.error("تعذر الإرسال")
-    },
     onSuccess: () => {
       try {
         setText("")
@@ -105,12 +64,8 @@ export function ChatComposer({
         /* ignore */
       }
     },
-    onSettled: async () => {
-      try {
-        await queryClient.invalidateQueries({ queryKey: messagesQueryKey })
-      } catch {
-        /* ignore */
-      }
+    onError: () => {
+      toast.error("تعذر الإرسال")
     },
   })
 

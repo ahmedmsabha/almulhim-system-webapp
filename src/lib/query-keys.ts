@@ -12,5 +12,6 @@ export const queryKeys = {
   adminStudents: () => ["admin", "students"] as const,
   adminConversation: (id: string) => ["admin", "conversation", id] as const,
   adminMessages: () => ["admin", "messages"] as const,
+  adminAnnouncements: () => ["admin", "announcements"] as const,
   adminSettings: () => ["admin", "settings"] as const,
 }
