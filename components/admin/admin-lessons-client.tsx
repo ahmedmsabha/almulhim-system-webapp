@@ -42,9 +42,16 @@ import {
 } from "@/actions/admin-lessons"
 import {
   adminFinalizeLessonHlsFromUpload,
+  adminGetLessonHlsVariants,
   adminPresignHlsPartUploads,
+  adminSaveLessonHlsVariants,
 } from "@/actions/admin-media-hls"
+import {
+  adminPresignLessonSourceVideoUpload,
+  adminTranscodeLessonUploadedVideo,
+} from "@/actions/admin-media-video-source"
 import { AdminUploadOverlay } from "@/components/admin/admin-upload-overlay"
+import { Checkbox } from "@/components/ui/checkbox"
 import { collectFilesWithRelativePathsFromDrop } from "@/lib/client/collect-files-from-data-transfer"
 import { xhrPutBlob } from "@/lib/client/admin-upload-xhr"
 import { queryKeys } from "@/lib/query-keys"
@@ -77,14 +84,43 @@ async function mapPool<T>(items: T[], concurrency: number, worker: (item: T) => 
   await Promise.all(workers)
 }
 
+/** تقدير مدة الفيديو من المتصفح قبل الرفع (بالثواني). */
+function probeDurationFromVideoFile(file: File): Promise<number | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file)
+    const video = document.createElement("video")
+    const finish = (sec: number | null) => {
+      URL.revokeObjectURL(url)
+      resolve(sec)
+    }
+    video.preload = "metadata"
+    video.onloadedmetadata = () => {
+      const d = video.duration
+      finish(Number.isFinite(d) && d > 0 ? d : null)
+    }
+    video.onerror = () => finish(null)
+    video.src = url
+  })
+}
+
 export function AdminLessonsClient({
   initialLessons,
   autoOpenCreate = false,
-  enableR2FolderUpload = false,
+  enableR2LessonUpload = false,
+  r2PublicPlaybackReady = false,
+  enableR2ServerMedia = false,
+  enableVideoTranscode = false,
 }: {
   initialLessons: VideoLesson[]
   autoOpenCreate?: boolean
-  enableR2FolderUpload?: boolean
+  /** بيانات R2 على الخادم — يُظهر الرفع إلى الحاوية دون بوابة Cloudflare */
+  enableR2LessonUpload?: boolean
+  /** دومين الملفات العام (NEXT_PUBLIC_R2_PUBLIC_BASE_URL) — للتشغيل وربط master بعد الرفع */
+  r2PublicPlaybackReady?: boolean
+  /** قراءة/كتابة master ومسح الملفات يعتمد على مفاتيح R2 على الخادم */
+  enableR2ServerMedia?: boolean
+  /** رفع فيديو خام + ffmpeg على الخادم (يتطلب ffmpeg على الخادم) */
+  enableVideoTranscode?: boolean
 }) {
   const queryClient = useQueryClient()
 
@@ -141,8 +177,13 @@ export function AdminLessonsClient({
         throw e instanceof Error ? e : new Error("فشل الحذف")
       }
     },
-    onSuccess: async () => {
-      toast.success("تم حذف الدرس")
+    onSuccess: async (data) => {
+      const n = data?.r2Removed
+      toast.success(
+        typeof n === "number" && n > 0
+          ? `تم حذف الدرس وإزالة ${n} ملفاً من R2`
+          : "تم حذف الدرس"
+      )
       try {
         await queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
       } catch {
@@ -221,11 +262,22 @@ export function AdminLessonsClient({
   } | null>(null)
   const hlsBusy = hlsUploadOverlay !== null
   const hlsFolderInputRef = useRef<HTMLInputElement>(null)
+  const rawVideoInputRef = useRef<HTMLInputElement>(null)
   const [hlsDragOver, setHlsDragOver] = useState(false)
+  const [sourceVideoDragOver, setSourceVideoDragOver] = useState(false)
+  const [hlsVariantRows, setHlsVariantRows] = useState<Array<{ uri: string; label: string }>>([])
+  const [hlsVariantSelected, setHlsVariantSelected] = useState<Set<string>>(() => new Set())
+  const [hlsVariantsLoading, setHlsVariantsLoading] = useState(false)
+  const [hlsVariantsSaving, setHlsVariantsSaving] = useState(false)
+  /** مُنشأ تلقائياً للرفع قبل أول «حفظ»؛ عند الإلغاء يُحذف إن لم يُرفع وسيط */
+  const [mediaDraftFlow, setMediaDraftFlow] = useState(false)
+  const [mediaDraftCreating, setMediaDraftCreating] = useState(false)
+  const mediaDraftSeqRef = useRef(0)
 
   useEffect(() => {
     if (!autoOpenCreate) return
     setEditingLesson(null)
+    setMediaDraftFlow(false)
     setFormTitle("")
     setFormDesc("")
     setFormHlsUrl("")
@@ -236,14 +288,83 @@ export function AdminLessonsClient({
     setShowAddDialog(true)
   }, [autoOpenCreate])
 
+  useEffect(() => {
+    setHlsVariantRows([])
+    setHlsVariantSelected(new Set())
+  }, [editingLesson?.id])
+
   const units = useMemo(() => {
     const u = [...new Set(lessons.map((l) => l.unit).filter(Boolean))]
     if (!u.includes("عام")) u.unshift("عام")
     return u
   }, [lessons])
 
-  const openAdd = () => {
+  const closeLessonDialog = () => {
+    mediaDraftSeqRef.current += 1
+    if (mediaDraftFlow && editingLesson?.id) {
+      const hasMedia = Boolean(formHlsUrl.trim() || formYoutubeId.trim())
+      if (!hasMedia) {
+        void adminRemoveVideo(editingLesson.id).then((res) => {
+          if (res.success) {
+            void queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
+          }
+        })
+      }
+    }
+    setMediaDraftFlow(false)
+    setMediaDraftCreating(false)
+    setShowAddDialog(false)
     setEditingLesson(null)
+  }
+
+  /** عند تفعيل الرفع على R2: إنشاء درس مسوّد فوراً ليظهر مربع الرفع دون الضغط على «إضافة». */
+  useEffect(() => {
+    if (!showAddDialog) return
+    if (editingLesson || formPreview) return
+    if (!enableR2LessonUpload && !enableVideoTranscode) return
+
+    const seq = ++mediaDraftSeqRef.current
+    let cancelled = false
+    setMediaDraftCreating(true)
+
+    ;(async () => {
+      try {
+        const res = await adminCreateVideo({
+          title: "درس جديد",
+          description: "",
+          unit: "عام",
+          duration: 1800,
+          hls_url: null,
+          youtube_id: null,
+          is_preview: false,
+          is_published: false,
+        })
+        if (cancelled || seq !== mediaDraftSeqRef.current || !res.success || !res.data) return
+        setEditingLesson(res.data)
+        setMediaDraftFlow(true)
+        setFormTitle((t) => (t.trim() ? t : res.data!.title))
+        setFormDesc((d) => (d.trim() ? d : res.data!.description ?? ""))
+        setFormUnit(res.data!.unit || "عام")
+        setFormDurationMin(String(Math.max(1, Math.round(res.data!.duration / 60))))
+        void queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "تعذّر تجهيز الدرس للرفع")
+      } finally {
+        if (!cancelled && seq === mediaDraftSeqRef.current) {
+          setMediaDraftCreating(false)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [showAddDialog, editingLesson, formPreview, enableR2LessonUpload, enableVideoTranscode, queryClient])
+
+  const openAdd = () => {
+    mediaDraftSeqRef.current += 1
+    setEditingLesson(null)
+    setMediaDraftFlow(false)
     setFormTitle("")
     setFormDesc("")
     setFormHlsUrl("")
@@ -251,10 +372,14 @@ export function AdminLessonsClient({
     setFormUnit("عام")
     setFormDurationMin("30")
     setFormPreview(false)
+    setHlsVariantRows([])
+    setHlsVariantSelected(new Set())
     setShowAddDialog(true)
   }
 
   const openEdit = (l: VideoLesson) => {
+    mediaDraftSeqRef.current += 1
+    setMediaDraftFlow(false)
     setEditingLesson(l)
     setFormTitle(l.title)
     setFormDesc(l.description)
@@ -263,6 +388,8 @@ export function AdminLessonsClient({
     setFormUnit(l.unit)
     setFormDurationMin(String(Math.max(1, Math.round(l.duration / 60))))
     setFormPreview(l.is_preview)
+    setHlsVariantRows([])
+    setHlsVariantSelected(new Set())
     setShowAddDialog(true)
   }
 
@@ -366,6 +493,9 @@ export function AdminLessonsClient({
 
       toast.success("تم رفع المجلد وربط قائمة التشغيل بالدرس")
       setFormHlsUrl(fin.data?.hls_url ?? "")
+      if (fin.data) {
+        setEditingLesson(fin.data)
+      }
       try {
         await queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
       } catch {
@@ -402,14 +532,175 @@ export function AdminLessonsClient({
     await runHlsFolderUpload(collected)
   }
 
+  const runRawVideoUploadAndTranscode = async (file: File) => {
+    const lessonId = editingLesson?.id
+    if (!lessonId) {
+      toast.error("احفظ الدرس أولاً ليُنشأ معرّف ثابت")
+      return
+    }
+    if (formPreview) return
+    const looksVideo =
+      (file.type && file.type.startsWith("video/")) ||
+      /\.(mp4|mov|webm|mkv|avi|m4v)$/i.test(file.name)
+    if (!file.size || !looksVideo) {
+      toast.error("اختر ملف فيديو صالحاً (mp4، mov، webm…)")
+      return
+    }
+    const maxBytes = 4 * 1024 * 1024 * 1024
+    if (file.size > maxBytes) {
+      toast.error("الحد الأقصى لحجم الملف 4 غيغابايت")
+      return
+    }
+
+    const metaDur = await probeDurationFromVideoFile(file)
+    if (metaDur != null) {
+      setFormDurationMin(String(Math.max(1, Math.ceil(metaDur / 60))))
+    }
+
+    setHlsUploadOverlay({
+      pct: 5,
+      title: "رفع الفيديو إلى R2",
+      subtitle: "جاري طلب رابط الرفع…",
+    })
+
+    try {
+      const presign = await adminPresignLessonSourceVideoUpload(
+        lessonId,
+        file.name,
+        file.type || "application/octet-stream",
+        file.size
+      )
+      if (!presign.success) {
+        toast.error(presign.error)
+        return
+      }
+
+      const { signedUrl, relativePath, contentType } = presign.data
+      await xhrPutBlob(signedUrl, file, contentType, (loaded, total) => {
+        const ratio = Math.min(1, loaded / Math.max(total, 1))
+        setHlsUploadOverlay({
+          pct: Math.min(42, 5 + Math.round(ratio * 37)),
+          title: "رفع الفيديو إلى R2",
+          subtitle: `${Math.round(ratio * 100)}%`,
+        })
+      })
+
+      setHlsUploadOverlay({
+        pct: 48,
+        title: "تحويل الفيديو إلى HLS",
+        subtitle: "يعمل ffmpeg على الخادم — قد يستغرق عدة دقائق لحسب طول الفيديو…",
+      })
+
+      const trans = await adminTranscodeLessonUploadedVideo(lessonId, relativePath)
+      if (!trans.success) {
+        toast.error(trans.error)
+        return
+      }
+
+      setHlsUploadOverlay({
+        pct: 100,
+        title: "اكتمل",
+        subtitle: "تم إنشاء HLS وربطه بالدرس",
+      })
+      await new Promise((r) => setTimeout(r, 400))
+
+      toast.success("تم رفع الفيديو وتحويله إلى HLS")
+      if (trans.data) {
+        setEditingLesson(trans.data)
+        setFormHlsUrl(trans.data.hls_url ?? "")
+        if (trans.data.duration != null && trans.data.duration > 0) {
+          setFormDurationMin(String(Math.max(1, Math.round(trans.data.duration / 60))))
+        }
+      }
+      try {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
+      } catch {
+        /* ignore */
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "فشل الرفع أو التحويل")
+    } finally {
+      setHlsUploadOverlay(null)
+    }
+  }
+
+  const handleRawVideoPick = async (e: ChangeEvent<HTMLInputElement>) => {
+    const list = e.target.files
+    e.target.value = ""
+    if (!list?.length) return
+    const file = list[0]
+    await runRawVideoUploadAndTranscode(file)
+  }
+
+  const handleRawVideoDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setSourceVideoDragOver(false)
+    if (!editingLesson?.id || hlsBusy || saving || formPreview || !enableVideoTranscode) return
+    const f = e.dataTransfer.files?.[0]
+    if (!f) {
+      toast.error("أسقط ملف فيديو واحداً")
+      return
+    }
+    await runRawVideoUploadAndTranscode(f)
+  }
+
+  const loadHlsVariantsFromR2 = async () => {
+    const id = editingLesson?.id
+    if (!id) return
+    setHlsVariantsLoading(true)
+    try {
+      const res = await adminGetLessonHlsVariants(id)
+      if (!res.success) {
+        toast.error(res.error)
+        return
+      }
+      setHlsVariantRows(res.data.variants)
+      setHlsVariantSelected(new Set(res.data.variants.map((v) => v.uri)))
+      toast.success("تم تحميل الجودات من master.m3u8")
+    } finally {
+      setHlsVariantsLoading(false)
+    }
+  }
+
+  const saveHlsVariantsToR2 = async () => {
+    const id = editingLesson?.id
+    if (!id) return
+    const ordered = hlsVariantRows
+      .filter((v) => hlsVariantSelected.has(v.uri))
+      .map((v) => v.uri)
+    if (!ordered.length) {
+      toast.error("فعّل جودة واحدة على الأقل")
+      return
+    }
+    setHlsVariantsSaving(true)
+    try {
+      const res = await adminSaveLessonHlsVariants(id, ordered)
+      if (!res.success) {
+        toast.error(res.error)
+        return
+      }
+      toast.success("تم تحديث قائمة الجودات على R2")
+      try {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
+      } catch {
+        /* ignore */
+      }
+    } finally {
+      setHlsVariantsSaving(false)
+    }
+  }
+
   const saveDialog = async () => {
     const dm = parseInt(formDurationMin, 10)
     const durationSec = Number.isFinite(dm) ? dm * 60 : 0
-    const keepOpen = enableR2FolderUpload && !formPreview
+    const keepOpen = (enableR2LessonUpload || enableVideoTranscode) && !formPreview
 
     setSaving(true)
     try {
+      let shouldCloseDialog = false
       if (editingLesson) {
+        const wasMediaDraft = mediaDraftFlow
         await updateLessonMutation.mutateAsync({
           id: editingLesson.id,
           patch: {
@@ -420,9 +711,18 @@ export function AdminLessonsClient({
             unit: formUnit.trim() || "عام",
             duration: durationSec,
             is_preview: formPreview,
+            ...(mediaDraftFlow ? { is_published: true } : {}),
           },
         })
-        toast.success("تم حفظ التعديلات")
+        if (mediaDraftFlow) {
+          setMediaDraftFlow(false)
+          toast.success("تم حفظ الدرس ونشره للطلاب")
+        } else {
+          toast.success("تم حفظ التعديلات")
+        }
+        if (wasMediaDraft || !keepOpen) {
+          shouldCloseDialog = true
+        }
       } else {
         const created = await createLessonMutation.mutateAsync({
           title: formTitle.trim(),
@@ -435,14 +735,19 @@ export function AdminLessonsClient({
           is_published: true,
         })
         toast.success(
-          keepOpen ? "تمت إضافة الدرس — يمكنك رفع مجلد HLS من الأسفل دون إغلاق النافذة" : "تمت إضافة الدرس"
+          keepOpen ?
+            "تمت إضافة الدرس — يمكنك الآن رفع مجلد HLS أو فيديو خام من الأسفل دون إغلاق النافذة"
+          : "تمت إضافة الدرس"
         )
         if (keepOpen && created) {
           setEditingLesson(created)
         }
+        if (!keepOpen) {
+          shouldCloseDialog = true
+        }
       }
 
-      if (!keepOpen) {
+      if (shouldCloseDialog) {
         setShowAddDialog(false)
         setEditingLesson(null)
       }
@@ -611,15 +916,14 @@ export function AdminLessonsClient({
       <Dialog
         open={showAddDialog || !!editingLesson}
         onOpenChange={(open) => {
-          if (!open) {
-            setShowAddDialog(false)
-            setEditingLesson(null)
-          }
+          if (!open) closeLessonDialog()
         }}
       >
         <DialogContent className="max-w-lg overflow-y-auto max-h-[90vh]">
           <DialogHeader>
-            <DialogTitle>{editingLesson ? "تعديل الدرس" : "إضافة درس جديد"}</DialogTitle>
+            <DialogTitle>
+              {mediaDraftFlow ? "إضافة درس جديد" : editingLesson ? "تعديل الدرس" : "إضافة درس جديد"}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div>
@@ -641,9 +945,118 @@ export function AdminLessonsClient({
                 onChange={(e) => setFormDesc(e.target.value)}
               />
             </div>
+            {(enableR2LessonUpload || enableVideoTranscode) && !formPreview ?
+              <div className="space-y-3 rounded-lg border border-border bg-muted/15 p-3">
+                <p className="text-sm font-semibold text-foreground">رفع الفيديو هنا</p>
+                {enableR2LessonUpload && !r2PublicPlaybackReady ?
+                  <p className="text-xs text-amber-800 dark:text-amber-200/90 leading-relaxed rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2">
+                    لربط التشغيل بعد الرفع وتوليد روابط master للطلاب، عيّن{" "}
+                    <code className="rounded bg-muted/80 px-1" dir="ltr">
+                      NEXT_PUBLIC_R2_PUBLIC_BASE_URL
+                    </code>{" "}
+                    بلا ذلك قد ينجح الرفع إلى R2 لكن لن يُبنى رابط عام تلقائياً.
+                  </p>
+                : null}
+                {mediaDraftCreating ?
+                  <p className="text-xs text-muted-foreground">جاري تجهيز الدرس للرفع…</p>
+                : null}
+                {enableR2LessonUpload && editingLesson ?
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(ke) =>
+                      ke.key === "Enter" && !hlsBusy && hlsFolderInputRef.current?.click()
+                    }
+                    onDragEnter={(ev) => {
+                      ev.preventDefault()
+                      setHlsDragOver(true)
+                    }}
+                    onDragLeave={() => setHlsDragOver(false)}
+                    onDragOver={(ev) => {
+                      ev.preventDefault()
+                      ev.stopPropagation()
+                      setHlsDragOver(true)
+                    }}
+                    onDrop={(ev) => void handleHlsDrop(ev)}
+                    className={`rounded-lg border border-dashed p-3 space-y-2 bg-muted/30 transition-colors ${
+                      hlsDragOver ? "border-primary bg-primary/5" : "border-border"
+                    }`}
+                  >
+                    <input
+                      ref={hlsFolderInputRef}
+                      type="file"
+                      multiple
+                      className="hidden"
+                      {...({ webkitdirectory: "" } as Record<string, string>)}
+                      onChange={(ev) => void handleHlsFolderPick(ev)}
+                    />
+                    <p className="text-sm font-medium text-foreground">مجلد HLS جاهز</p>
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      اسحب المجلد أو اختره — يجب أن يتضمّن{" "}
+                      <code className="rounded bg-muted px-1">master.m3u8</code> والجزئيات. CORS للـ PUT على
+                      R2 يجب أن يسمح بأصل موقعك.
+                    </p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      disabled={hlsBusy || saving}
+                      onClick={() => hlsFolderInputRef.current?.click()}
+                    >
+                      {hlsBusy ? "جاري الرفع…" : "اختيار مجلد HLS"}
+                    </Button>
+                  </div>
+                : null}
+                {enableVideoTranscode && editingLesson ?
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(ke) =>
+                      ke.key === "Enter" && !hlsBusy && rawVideoInputRef.current?.click()
+                    }
+                    onDragEnter={(ev) => {
+                      ev.preventDefault()
+                      setSourceVideoDragOver(true)
+                    }}
+                    onDragLeave={() => setSourceVideoDragOver(false)}
+                    onDragOver={(ev) => {
+                      ev.preventDefault()
+                      ev.stopPropagation()
+                      setSourceVideoDragOver(true)
+                    }}
+                    onDrop={(ev) => void handleRawVideoDrop(ev)}
+                    className={`rounded-lg border border-dashed p-3 space-y-2 bg-muted/30 transition-colors ${
+                      sourceVideoDragOver ? "border-primary bg-primary/5" : "border-border"
+                    }`}
+                  >
+                    <input
+                      ref={rawVideoInputRef}
+                      type="file"
+                      accept="video/*"
+                      className="hidden"
+                      onChange={(ev) => void handleRawVideoPick(ev)}
+                    />
+                    <p className="text-sm font-medium text-foreground">فيديو خام (سحب أو اختيار)</p>
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      يُحوَّل على الخادم إلى HLS: <strong>1080p و720p و480p</strong>. المدة تُحدَّد تلقائياً.
+                      التحويل يحتاج ffmpeg على السيرفر؛ خطط مثل Vercel قد توقف الفيديو الطويل قبل انتهاء التحويل.
+                    </p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      disabled={hlsBusy || saving}
+                      onClick={() => rawVideoInputRef.current?.click()}
+                    >
+                      {hlsBusy ? "جاري العمل…" : "اختيار ملف فيديو"}
+                    </Button>
+                  </div>
+                : null}
+              </div>
+            : null}
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground block">
-                رابط HLS (master.m3u8 على R2)
+                رابط HLS (master.m3u8 على R2) — اختياري إن رفعت أعلاه
               </label>
               <Input
                 placeholder="https://…/hls/{lesson}/…/master.m3u8"
@@ -652,61 +1065,69 @@ export function AdminLessonsClient({
                 onChange={(e) => setFormHlsUrl(e.target.value)}
               />
               <p className="text-xs text-muted-foreground leading-relaxed">
-                للدروس الكاملة: إما لصق الرابط العام لـ master.m3u8، أو رفع مجلد HLS كاملاً من المتصفح عندما يكون R2 مهيّأً.
+                يمكنك لصق رابط يدوي، أو تركه فارغاً والاعتماد على الرفع من المربع أعلاه.
               </p>
-              {enableR2FolderUpload && editingLesson && !formPreview ?
-                <div
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(ke) =>
-                    ke.key === "Enter" && !hlsBusy && hlsFolderInputRef.current?.click()
-                  }
-                  onDragEnter={(ev) => {
-                    ev.preventDefault()
-                    setHlsDragOver(true)
-                  }}
-                  onDragLeave={() => setHlsDragOver(false)}
-                  onDragOver={(ev) => {
-                    ev.preventDefault()
-                    ev.stopPropagation()
-                    setHlsDragOver(true)
-                  }}
-                  onDrop={(ev) => void handleHlsDrop(ev)}
-                  className={`rounded-lg border border-dashed p-3 space-y-2 bg-muted/30 transition-colors ${
-                    hlsDragOver ? "border-primary bg-primary/5" : "border-border"
-                  }`}
-                >
-                  <input
-                    ref={hlsFolderInputRef}
-                    type="file"
-                    multiple
-                    className="hidden"
-                    {...({ webkitdirectory: "" } as Record<string, string>)}
-                    onChange={(ev) => void handleHlsFolderPick(ev)}
-                  />
-                  <p className="text-sm font-medium text-foreground">رفع ملفات الفيديو (HLS)</p>
-                  <p className="text-xs text-muted-foreground leading-relaxed">
-                    اسحب مجلد الترميز هنا أو اختره — يجب أن يتضمّن <code className="rounded bg-muted px-1">master.m3u8</code> والجزئيات.
-                  </p>
+            </div>
+            {enableR2ServerMedia && editingLesson && !formPreview && formHlsUrl.trim() ?
+              <div className="rounded-lg border border-border p-3 space-y-3 bg-muted/20">
+                <p className="text-sm font-medium text-foreground">تعديل الجودات على R2</p>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  يُقرأ ملف <code className="rounded bg-muted px-1">master.m3u8</code> من السحابة. أزل
+                  علامة أي جودة لإخفائها عن قائمة التشغيل (الملفات تبقى على R2 ما لم تحذف المجلد يدوياً).
+                  إن كان الدرس قد أُنشئ برابط يدوي خارج مسار التطبيق قد لا يتوفر هذا الخيار.
+                </p>
+                <div className="flex flex-wrap gap-2">
                   <Button
                     type="button"
                     variant="secondary"
                     size="sm"
-                    disabled={hlsBusy || saving}
-                    onClick={() => hlsFolderInputRef.current?.click()}
+                    disabled={hlsBusy || saving || hlsVariantsLoading}
+                    onClick={() => void loadHlsVariantsFromR2()}
                   >
-                    {hlsBusy ? "جاري الرفع…" : "اختيار مجلد HLS"}
+                    {hlsVariantsLoading ? "جاري التحميل…" : "جلب الجودات الحالية"}
                   </Button>
-                  <p className="text-xs text-muted-foreground leading-relaxed">
-                    على R2 يجب السماح بطلبات PUT من أصل موقعك في إعدادات CORS.
-                  </p>
                 </div>
-              : enableR2FolderUpload && !editingLesson && !formPreview ?
-                <p className="text-xs text-muted-foreground">
-                  احفظ الدرس أولاً ليُنشأ معرّف ثابت ثم ارجع لهذا الحوار أو أبقِ النافذة مفتوحة بعد الحفظ لرفع المجلد.
-                </p>
-              : null}
-            </div>
+                {hlsVariantRows.length > 0 ?
+                  <ul className="space-y-2">
+                    {hlsVariantRows.map((row, idx) => (
+                      <li key={`${row.uri}-${idx}`} className="flex items-start gap-2">
+                        <Checkbox
+                          id={`hls-var-${editingLesson.id}-${idx}`}
+                          checked={hlsVariantSelected.has(row.uri)}
+                          onCheckedChange={(c) => {
+                            setHlsVariantSelected((prev) => {
+                              const next = new Set(prev)
+                              if (c === true) next.add(row.uri)
+                              else if (c === false) next.delete(row.uri)
+                              return next
+                            })
+                          }}
+                        />
+                        <label
+                          htmlFor={`hls-var-${editingLesson.id}-${idx}`}
+                          className="text-sm leading-tight cursor-pointer flex-1"
+                        >
+                          <span className="font-medium">{row.label}</span>
+                          <span className="block text-xs text-muted-foreground font-mono break-all">
+                            {row.uri}
+                          </span>
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                : null}
+                {hlsVariantRows.length > 0 ?
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={hlsBusy || saving || hlsVariantsSaving}
+                    onClick={() => void saveHlsVariantsToR2()}
+                  >
+                    {hlsVariantsSaving ? "جاري الحفظ…" : "حفظ الجودات على R2"}
+                  </Button>
+                : null}
+              </div>
+            : null}
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground block">
                 معرّف يوتيوب (معاينات فقط)
@@ -745,6 +1166,9 @@ export function AdminLessonsClient({
                   value={formDurationMin}
                   onChange={(e) => setFormDurationMin(e.target.value)}
                 />
+                <p className="text-xs text-muted-foreground mt-1">
+                  عند اختيار فيديو خام للرفع والتحويل تُملأ المدة تلقائياً من الملف؛ يمكنك تعديلها يدوياً.
+                </p>
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -765,10 +1189,7 @@ export function AdminLessonsClient({
               type="button"
               variant="outline"
               disabled={hlsBusy}
-              onClick={() => {
-                setShowAddDialog(false)
-                setEditingLesson(null)
-              }}
+              onClick={() => closeLessonDialog()}
             >
               إلغاء
             </Button>
@@ -777,7 +1198,7 @@ export function AdminLessonsClient({
               disabled={saving || hlsBusy || !formTitle.trim()}
               onClick={() => void saveDialog()}
             >
-              {editingLesson ? "حفظ" : "إضافة"}
+              {!editingLesson ? "إضافة" : mediaDraftFlow ? "حفظ ونشر" : "حفظ"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1,7 +1,9 @@
 import "server-only"
 
 import {
+  DeleteObjectsCommand,
   GetObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   type GetObjectCommandOutput,
   S3Client,
@@ -90,6 +92,195 @@ export function objectKeyFromHlsMasterUrl(masterUrl: string): string | null {
   } catch {
     return null
   }
+}
+
+export function isUrlUnderR2PublicBase(masterUrl: string): boolean {
+  const base = getR2PublicBaseUrl()
+  if (!base) return false
+  try {
+    return new URL(masterUrl.trim()).origin === new URL(base).origin
+  } catch {
+    return false
+  }
+}
+
+export function lessonHlsObjectPrefix(lessonId: string): string {
+  return `hls/${lessonId}`
+}
+
+/** True when the stored master URL points to objects under `hls/{lessonId}/…` on this bucket. */
+export function masterObjectKeyBelongsToLesson(lessonId: string, masterUrl: string | null): boolean {
+  if (!masterUrl) return false
+  const key = objectKeyFromHlsMasterUrl(masterUrl)
+  if (!key) return false
+  return key.startsWith(`${lessonHlsObjectPrefix(lessonId)}/`)
+}
+
+export async function r2GetObjectUtf8(objectKey: string): Promise<string> {
+  if (!isR2Configured()) {
+    throw new Error("R2 is not configured")
+  }
+  const client = getS3Client()
+  const bucket = getBucket()
+  return fetchObjectUtf8(client, bucket, objectKey)
+}
+
+export async function r2PutObjectUtf8(
+  objectKey: string,
+  body: string,
+  contentType: string
+): Promise<void> {
+  if (!isR2Configured()) {
+    throw new Error("R2 is not configured")
+  }
+  const client = getS3Client()
+  const bucket = getBucket()
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: objectKey,
+      Body: Buffer.from(body, "utf8"),
+      ContentType: contentType,
+      ContentDisposition: "inline",
+    })
+  )
+}
+
+const R2_DELETE_BATCH = 1000
+
+/** Deletes every object whose key starts with `{prefix}/`. Returns count removed. */
+export async function r2DeleteObjectsWithPrefix(prefix: string): Promise<number> {
+  if (!isR2Configured()) {
+    throw new Error("R2 is not configured")
+  }
+  const normalized = prefix.replace(/^\/+/, "").replace(/\/+$/, "")
+  const listPrefix = normalized ? `${normalized}/` : ""
+  const client = getS3Client()
+  const bucket = getBucket()
+  let deleted = 0
+  let continuationToken: string | undefined
+
+  for (;;) {
+    const list = await client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: listPrefix,
+        ContinuationToken: continuationToken,
+      })
+    )
+    const keys =
+      list.Contents?.map((o) => o.Key).filter((k): k is string => Boolean(k)) ?? []
+    continuationToken = list.IsTruncated ? list.NextContinuationToken : undefined
+
+    for (let i = 0; i < keys.length; i += R2_DELETE_BATCH) {
+      const slice = keys.slice(i, i + R2_DELETE_BATCH)
+      if (!slice.length) continue
+      await client.send(
+        new DeleteObjectsCommand({
+          Bucket: bucket,
+          Delete: {
+            Objects: slice.map((Key) => ({ Key })),
+            Quiet: true,
+          },
+        })
+      )
+      deleted += slice.length
+    }
+
+    if (!continuationToken) break
+  }
+
+  return deleted
+}
+
+/** يحذف كل مفاتيح `hls/{lessonId}/…` ما عدا البادئة `hls/{lessonId}/_source/…`. */
+export async function r2DeleteLessonHlsExceptSource(lessonId: string): Promise<number> {
+  if (!isR2Configured()) {
+    throw new Error("R2 is not configured")
+  }
+  const listPrefix = `${lessonHlsObjectPrefix(lessonId)}/`
+  const keepPrefix = `${lessonHlsObjectPrefix(lessonId)}/_source/`
+  const client = getS3Client()
+  const bucket = getBucket()
+  let deleted = 0
+  let continuationToken: string | undefined
+  const toDelete: string[] = []
+
+  for (;;) {
+    const list = await client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: listPrefix,
+        ContinuationToken: continuationToken,
+      })
+    )
+    const keys =
+      list.Contents?.map((o) => o.Key).filter((k): k is string => Boolean(k)) ?? []
+    continuationToken = list.IsTruncated ? list.NextContinuationToken : undefined
+
+    for (const key of keys) {
+      if (!key.startsWith(keepPrefix)) {
+        toDelete.push(key)
+      }
+    }
+
+    if (!continuationToken) break
+  }
+
+  for (let i = 0; i < toDelete.length; i += R2_DELETE_BATCH) {
+    const slice = toDelete.slice(i, i + R2_DELETE_BATCH)
+    if (!slice.length) continue
+    await client.send(
+      new DeleteObjectsCommand({
+        Bucket: bucket,
+        Delete: {
+          Objects: slice.map((Key) => ({ Key })),
+          Quiet: true,
+        },
+      })
+    )
+    deleted += slice.length
+  }
+
+  return deleted
+}
+
+export async function r2DownloadObjectToFile(objectKey: string, destPath: string): Promise<void> {
+  if (!isR2Configured()) {
+    throw new Error("R2 is not configured")
+  }
+  const { createWriteStream } = await import("node:fs")
+  const { pipeline } = await import("node:stream/promises")
+  const client = getS3Client()
+  const bucket = getBucket()
+  const out = await client.send(new GetObjectCommand({ Bucket: bucket, Key: objectKey }))
+  if (!out.Body) {
+    throw new Error("empty R2 object body")
+  }
+  await pipeline(out.Body as NodeJS.ReadableStream, createWriteStream(destPath))
+}
+
+export async function r2PutObjectFromFile(
+  objectKey: string,
+  filePath: string,
+  contentType: string
+): Promise<void> {
+  if (!isR2Configured()) {
+    throw new Error("R2 is not configured")
+  }
+  const { readFile } = await import("node:fs/promises")
+  const client = getS3Client()
+  const bucket = getBucket()
+  const Body = await readFile(filePath)
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: objectKey,
+      Body,
+      ContentType: contentType,
+      ContentDisposition: "inline",
+    })
+  )
 }
 
 function dirnameKey(key: string): string {

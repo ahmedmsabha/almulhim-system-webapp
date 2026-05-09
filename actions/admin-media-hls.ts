@@ -10,9 +10,20 @@ import {
 import { requireAdmin } from "@/actions/auth"
 import { adminUpdateVideoLesson, getVideoById } from "@/lib/db/queries/videos"
 import {
+  isMultivariantMaster,
+  parseMasterPlaylist,
+  rebuildMasterPlaylist,
+  variantDisplayLabel,
+} from "@/lib/hls/master-playlist"
+import {
   getR2PublicBaseUrl,
-  isR2BrowserUploadConfigured,
+  isR2Configured,
+  isUrlUnderR2PublicBase,
+  masterObjectKeyBelongsToLesson,
+  objectKeyFromHlsMasterUrl,
   presignR2PutObject,
+  r2GetObjectUtf8,
+  r2PutObjectUtf8,
 } from "@/lib/storage/r2-hls-presign"
 import type { ActionResult } from "@/types/api"
 import type { VideoLesson } from "@/types"
@@ -71,9 +82,9 @@ export async function adminPresignHlsPartUploads(
       return actionFailure(gate.error, gate.code)
     }
 
-    if (!isR2BrowserUploadConfigured()) {
+    if (!isR2Configured()) {
       return actionFailure(
-        "رفع الفيديو إلى R2 غير مفعّل: اضبط R2_ACCOUNT_ID و R2_ACCESS_KEY_ID و R2_SECRET_ACCESS_KEY و R2_BUCKET_NAME و NEXT_PUBLIC_R2_PUBLIC_BASE_URL (الدومين العام للملفات).",
+        "رفع الفيديو إلى R2 غير مفعّل: اضبط R2_ACCOUNT_ID و R2_ACCESS_KEY_ID و R2_SECRET_ACCESS_KEY و R2_BUCKET_NAME. للرفع من المتصفح أو التطبيق فعّل CORS على الحاوية للسماح بـ PUT من أصل موقعك.",
         "UNKNOWN"
       )
     }
@@ -117,11 +128,8 @@ export async function adminFinalizeLessonHlsFromUpload(
       return actionFailure(gate.error, gate.code)
     }
 
-    if (!isR2BrowserUploadConfigured()) {
-      return actionFailure(
-        "إعدادات R2 أو عنوان CDN العام غير مكتملة.",
-        "UNKNOWN"
-      )
+    if (!isR2Configured()) {
+      return actionFailure("R2 غير مُهيأ على الخادم.", "UNKNOWN")
     }
 
     const lesson = await getVideoById(lessonId)
@@ -133,10 +141,138 @@ export async function adminFinalizeLessonHlsFromUpload(
     const objectKey = `hls/${lessonId}/${relativePath}`
     const hlsUrl = publicUrlForObjectKey(objectKey)
     if (!hlsUrl) {
-      return actionFailure("تعذّر بناء رابط قائمة التشغيل", "UNKNOWN")
+      return actionFailure(
+        "تعذّر بناء رابط master العام. عيّن NEXT_PUBLIC_R2_PUBLIC_BASE_URL (دومين R2 العام) ثم أعد المحاولة — الملفات قد تكون مرفوعة لكن التشغيل يحتاج هذا العنوان.",
+        "UNKNOWN"
+      )
     }
 
     const updated = await adminUpdateVideoLesson(lessonId, { hls_url: hlsUrl })
+    return actionSuccess(updated)
+  } catch (e) {
+    return mapCaughtErrorToAction(e)
+  }
+}
+
+const variantUrisSchema = z.array(z.string().min(1)).min(1)
+
+export async function adminGetLessonHlsVariants(
+  lessonId: string
+): Promise<
+  ActionResult<{
+    variants: Array<{ uri: string; label: string; streamInfLine: string }>
+  }>
+> {
+  try {
+    const gate = await requireAdmin()
+    if (!gate.success) {
+      return actionFailure(gate.error, gate.code)
+    }
+
+    if (!isR2Configured()) {
+      return actionFailure("R2 غير مُهيأ على الخادم", "UNKNOWN")
+    }
+
+    const lesson = await getVideoById(lessonId)
+    if (!lesson?.hls_url) {
+      return actionFailure("لا يوجد رابط HLS لهذا الدرس", "NOT_FOUND")
+    }
+
+    if (
+      !isUrlUnderR2PublicBase(lesson.hls_url) ||
+      !masterObjectKeyBelongsToLesson(lessonId, lesson.hls_url)
+    ) {
+      return actionFailure(
+        "يُدعم تعديل الجودات فقط لملفات master المخزّنة على R2 تحت المسار hls/{معرّف الدرس}/… (كما في الرفع من التطبيق).",
+        "VALIDATION_ERROR"
+      )
+    }
+
+    const masterKey = objectKeyFromHlsMasterUrl(lesson.hls_url)
+    if (!masterKey) {
+      return actionFailure("رابط master غير صالح", "VALIDATION_ERROR")
+    }
+
+    const text = await r2GetObjectUtf8(masterKey)
+    if (!isMultivariantMaster(text)) {
+      return actionFailure(
+        "هذا الملف ليس master متعدد الجودات (لا يحتوي EXT-X-STREAM-INF). ارفع مجلداً يتضمن master.m3u8 بعدة جودات.",
+        "VALIDATION_ERROR"
+      )
+    }
+
+    const parsed = parseMasterPlaylist(text)
+    if (!parsed.variants.length) {
+      return actionFailure("لم يُعثر على جودات في قائمة التشغيل", "VALIDATION_ERROR")
+    }
+
+    const variants = parsed.variants.map((v) => ({
+      uri: v.uri,
+      label: variantDisplayLabel(v.streamInfLine, v.uri),
+      streamInfLine: v.streamInfLine,
+    }))
+
+    return actionSuccess({ variants })
+  } catch (e) {
+    return mapCaughtErrorToAction(e)
+  }
+}
+
+export async function adminSaveLessonHlsVariants(
+  lessonId: string,
+  selectedUris: string[]
+): Promise<ActionResult<VideoLesson | null>> {
+  try {
+    const gate = await requireAdmin()
+    if (!gate.success) {
+      return actionFailure(gate.error, gate.code)
+    }
+
+    if (!isR2Configured()) {
+      return actionFailure("R2 غير مُهيأ على الخادم", "UNKNOWN")
+    }
+
+    const uris = variantUrisSchema.parse(selectedUris)
+
+    const lesson = await getVideoById(lessonId)
+    if (!lesson?.hls_url) {
+      return actionFailure("لا يوجد رابط HLS لهذا الدرس", "NOT_FOUND")
+    }
+
+    if (
+      !isUrlUnderR2PublicBase(lesson.hls_url) ||
+      !masterObjectKeyBelongsToLesson(lessonId, lesson.hls_url)
+    ) {
+      return actionFailure(
+        "لا يمكن حفظ الجودات إلا لملفات master على مسار الدرس في R2.",
+        "VALIDATION_ERROR"
+      )
+    }
+
+    const masterKey = objectKeyFromHlsMasterUrl(lesson.hls_url)
+    if (!masterKey) {
+      return actionFailure("رابط master غير صالح", "VALIDATION_ERROR")
+    }
+
+    const text = await r2GetObjectUtf8(masterKey)
+    if (!isMultivariantMaster(text)) {
+      return actionFailure("الملف ليس master متعدد الجودات", "VALIDATION_ERROR")
+    }
+
+    const parsed = parseMasterPlaylist(text)
+    const byUri = new Map(parsed.variants.map((v) => [v.uri, v]))
+    const ordered: typeof parsed.variants = []
+    for (const u of uris) {
+      const row = byUri.get(u)
+      if (!row) {
+        return actionFailure(`مسار جودة غير موجود في القائمة الحالية: ${u}`, "VALIDATION_ERROR")
+      }
+      ordered.push(row)
+    }
+
+    const rebuilt = rebuildMasterPlaylist(parsed, ordered)
+    await r2PutObjectUtf8(masterKey, rebuilt, "application/vnd.apple.mpegurl")
+    const updated = await adminUpdateVideoLesson(lessonId, { hls_url: lesson.hls_url })
     return actionSuccess(updated)
   } catch (e) {
     return mapCaughtErrorToAction(e)
