@@ -33,6 +33,11 @@ function serverActionAllowedOrigins() {
  */
 const withPWA = withPWAInit({
   dest: 'public',
+  /**
+   * next-pwa يضمّ `customWorkerSrc/index.ts` في Service Worker. مجلد `worker/` كان يضم
+   * عامل ترانسكود Node — webpack يفشل على `node:*`. الإبقاء على مجلد فارغ + كود الدفع في `public/sw-custom.js`.
+   */
+  customWorkerSrc: path.join(__dirname, 'pwa-sw-append'),
   register: true,
   skipWaiting: true,
   disable: process.env.NODE_ENV === 'development',

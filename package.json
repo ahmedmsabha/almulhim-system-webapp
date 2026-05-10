@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "postinstall": "node scripts/copy-pdf-worker.mjs",
+    "postinstall": "node scripts/copy-pdf-worker.mjs && patch-package",
     "generate:splash": "node scripts/generate-pwa-splash.mjs",
     "preview": "npm run build && npm run start",
     "dev": "next dev",
@@ -92,6 +92,7 @@
     "@types/react-dom": "^19",
     "@types/web-push": "^3.6.4",
     "drizzle-kit": "^0.31.10",
+    "patch-package": "^8.0.1",
     "postcss": "^8.5.10",
     "sharp": "^0.34.5",
     "supabase": "^2.98.0",
