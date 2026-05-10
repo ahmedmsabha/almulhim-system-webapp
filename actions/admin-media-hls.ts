@@ -16,13 +16,19 @@ import {
   variantDisplayLabel,
 } from "@/lib/hls/master-playlist"
 import {
+  buildR2PublicUrlForObjectKey,
+  getR2BucketDisplayName,
   getR2PublicBaseUrl,
   isR2Configured,
   isUrlUnderR2PublicBase,
+  lessonHlsObjectPrefix,
+  lessonMasterObjectKey,
   masterObjectKeyBelongsToLesson,
   objectKeyFromHlsMasterUrl,
   presignR2PutObject,
   r2GetObjectUtf8,
+  r2InspectLessonHlsLayout,
+  r2ObjectExists,
   r2PutObjectUtf8,
 } from "@/lib/storage/r2-hls-presign"
 import type { ActionResult } from "@/types/api"
@@ -273,6 +279,87 @@ export async function adminSaveLessonHlsVariants(
     const rebuilt = rebuildMasterPlaylist(parsed, ordered)
     await r2PutObjectUtf8(masterKey, rebuilt, "application/vnd.apple.mpegurl")
     const updated = await adminUpdateVideoLesson(lessonId, { hls_url: lesson.hls_url })
+    return actionSuccess(updated)
+  } catch (e) {
+    return mapCaughtErrorToAction(e)
+  }
+}
+
+export async function adminGetLessonHlsR2Layout(lessonId: string): Promise<
+  ActionResult<{
+    bucketDisplayName: string | null
+    objectPrefix: string
+    masterExists: boolean
+    derivedMasterUrl: string | null
+    qualities: number[]
+  }>
+> {
+  try {
+    const gate = await requireAdmin()
+    if (!gate.success) {
+      return actionFailure(gate.error, gate.code)
+    }
+
+    if (!isR2Configured()) {
+      return actionFailure("R2 غير مُهيأ على الخادم.", "UNKNOWN")
+    }
+
+    const lesson = await getVideoById(lessonId)
+    if (!lesson) {
+      return actionFailure("الدرس غير موجود", "NOT_FOUND")
+    }
+
+    const { masterExists, qualities } = await r2InspectLessonHlsLayout(lessonId)
+    const derivedMasterUrl = buildR2PublicUrlForObjectKey(lessonMasterObjectKey(lessonId))
+
+    return actionSuccess({
+      bucketDisplayName: getR2BucketDisplayName(),
+      objectPrefix: `${lessonHlsObjectPrefix(lessonId)}/`,
+      masterExists,
+      derivedMasterUrl,
+      qualities,
+    })
+  } catch (e) {
+    return mapCaughtErrorToAction(e)
+  }
+}
+
+/** يضبط `hls_url` من المسار القياسي `hls/{lessonId}/master.m3u8` إن وُجد الملف على R2. */
+export async function adminBindLessonHlsFromStandardR2Path(
+  lessonId: string
+): Promise<ActionResult<VideoLesson | null>> {
+  try {
+    const gate = await requireAdmin()
+    if (!gate.success) {
+      return actionFailure(gate.error, gate.code)
+    }
+
+    if (!isR2Configured()) {
+      return actionFailure("R2 غير مُهيأ على الخادم.", "UNKNOWN")
+    }
+
+    const lesson = await getVideoById(lessonId)
+    if (!lesson) {
+      return actionFailure("الدرس غير موجود", "NOT_FOUND")
+    }
+
+    const masterKey = lessonMasterObjectKey(lessonId)
+    if (!(await r2ObjectExists(masterKey))) {
+      return actionFailure(
+        "لا يوجد master.m3u8 على المسار القياسي في الحاوية (تأكد من الرفع أو انتهاء التحويل).",
+        "NOT_FOUND"
+      )
+    }
+
+    const hlsUrl = buildR2PublicUrlForObjectKey(masterKey)
+    if (!hlsUrl) {
+      return actionFailure(
+        "عيّن NEXT_PUBLIC_R2_PUBLIC_BASE_URL لبناء رابط التشغيل العام.",
+        "UNKNOWN"
+      )
+    }
+
+    const updated = await adminUpdateVideoLesson(lessonId, { hls_url: hlsUrl })
     return actionSuccess(updated)
   } catch (e) {
     return mapCaughtErrorToAction(e)

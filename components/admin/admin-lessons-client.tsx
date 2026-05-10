@@ -42,7 +42,9 @@ import {
   adminUpdateVideo,
 } from "@/actions/admin-lessons"
 import {
+  adminBindLessonHlsFromStandardR2Path,
   adminFinalizeLessonHlsFromUpload,
+  adminGetLessonHlsR2Layout,
   adminGetLessonHlsVariants,
   adminPresignHlsPartUploads,
   adminSaveLessonHlsVariants,
@@ -137,6 +139,7 @@ export function AdminLessonsClient({
   enableServerVideoTranscode = false,
   enableTranscoderWorkerQueue = false,
   enableCloudflareStreamUpload = false,
+  r2BucketDisplayName = null,
 }: {
   initialLessons: VideoLesson[]
   autoOpenCreate?: boolean
@@ -148,10 +151,12 @@ export function AdminLessonsClient({
   enableR2ServerMedia?: boolean
   /** رفع فيديو خام + ffmpeg على هذا الخادم (يتطلب ffmpeg) */
   enableServerVideoTranscode?: boolean
-  /** صف تحويل خارجي (عامل Railway/VM) بعد الرفع إلى R2 */
+  /** صف تحويل خارجي (عامل Railway/VM) بعد الرفع إلى R2 — يُهيأ بـ TRANSCODER_WORKER_URL */
   enableTranscoderWorkerQueue?: boolean
   /** رفع فيديو خام عبر Cloudflare Stream (tus)، بدون ffmpeg على الخادم */
   enableCloudflareStreamUpload?: boolean
+  /** اسم الحاوية من R2_BUCKET_NAME (للعرض في لوحة الإدارة) */
+  r2BucketDisplayName?: string | null
 }) {
   const queryClient = useQueryClient()
   const rawR2TranscodeAvailable =
@@ -302,6 +307,13 @@ export function AdminLessonsClient({
   const [hlsVariantSelected, setHlsVariantSelected] = useState<Set<string>>(() => new Set())
   const [hlsVariantsLoading, setHlsVariantsLoading] = useState(false)
   const [hlsVariantsSaving, setHlsVariantsSaving] = useState(false)
+  const [hlsR2ProbeBusy, setHlsR2ProbeBusy] = useState(false)
+  const [hlsR2BindBusy, setHlsR2BindBusy] = useState(false)
+  const [hlsR2Layout, setHlsR2Layout] = useState<{
+    masterExists: boolean
+    derivedMasterUrl: string | null
+    qualities: number[]
+  } | null>(null)
   /** مُنشأ تلقائياً للرفع قبل أول «حفظ»؛ عند الإلغاء يُحذف إن لم يُرفع وسيط */
   const [mediaDraftFlow, setMediaDraftFlow] = useState(false)
   const [mediaDraftCreating, setMediaDraftCreating] = useState(false)
@@ -347,6 +359,10 @@ export function AdminLessonsClient({
     setFormPreview(false)
     setShowAddDialog(true)
   }, [autoOpenCreate])
+
+  useEffect(() => {
+    setHlsR2Layout(null)
+  }, [editingLesson?.id])
 
   useEffect(() => {
     setHlsVariantRows([])
@@ -939,14 +955,75 @@ export function AdminLessonsClient({
     }
   }
 
+  const probeLessonHlsOnR2 = async () => {
+    const id = editingLesson?.id
+    if (!id) return
+    setHlsR2ProbeBusy(true)
+    try {
+      const res = await adminGetLessonHlsR2Layout(id)
+      if (!res.success) {
+        toast.error(res.error)
+        return
+      }
+      setHlsR2Layout({
+        masterExists: res.data.masterExists,
+        derivedMasterUrl: res.data.derivedMasterUrl,
+        qualities: res.data.qualities,
+      })
+      toast.success("تمت قراءة الحاوية")
+    } finally {
+      setHlsR2ProbeBusy(false)
+    }
+  }
+
+  const bindStandardR2Master = async () => {
+    const id = editingLesson?.id
+    if (!id) return
+    setHlsR2BindBusy(true)
+    try {
+      const res = await adminBindLessonHlsFromStandardR2Path(id)
+      if (!res.success) {
+        toast.error(res.error)
+        return
+      }
+      setFormHlsUrl(res.data?.hls_url ?? "")
+      const lay = await adminGetLessonHlsR2Layout(id)
+      if (lay.success) {
+        setHlsR2Layout({
+          masterExists: lay.data.masterExists,
+          derivedMasterUrl: lay.data.derivedMasterUrl,
+          qualities: lay.data.qualities,
+        })
+      }
+      toast.success("تم ربط رابط master من المسار القياسي في R2")
+      try {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
+      } catch {
+        /* ignore */
+      }
+    } finally {
+      setHlsR2BindBusy(false)
+    }
+  }
+
   const saveDialog = async () => {
     const dm = parseInt(formDurationMin, 10)
     const durationSec = Number.isFinite(dm) ? dm * 60 : 0
     const keepOpen =
       (enableR2LessonUpload || rawR2TranscodeAvailable || enableCloudflareStreamUpload) && !formPreview
 
+    const hadManualHlsUrl = Boolean(formHlsUrl.trim())
+    let hlsForSave = formHlsUrl.trim() || null
+
     setSaving(true)
     try {
+      if (editingLesson && !formPreview && enableR2ServerMedia && !hlsForSave) {
+        const lay = await adminGetLessonHlsR2Layout(editingLesson.id)
+        if (lay.success && lay.data.masterExists && lay.data.derivedMasterUrl) {
+          hlsForSave = lay.data.derivedMasterUrl
+        }
+      }
+
       let shouldCloseDialog = false
       if (editingLesson) {
         const wasMediaDraft = mediaDraftFlow
@@ -955,7 +1032,7 @@ export function AdminLessonsClient({
           patch: {
             title: formTitle.trim(),
             description: formDesc,
-            hls_url: formHlsUrl.trim() || null,
+            hls_url: hlsForSave,
             youtube_id: formYoutubeId.trim() || null,
             unit: formUnit.trim() || "عام",
             duration: durationSec,
@@ -969,6 +1046,9 @@ export function AdminLessonsClient({
         } else {
           toast.success("تم حفظ التعديلات")
         }
+        if (hlsForSave && !hadManualHlsUrl) {
+          setFormHlsUrl(hlsForSave)
+        }
         if (wasMediaDraft || !keepOpen) {
           shouldCloseDialog = true
         }
@@ -976,7 +1056,7 @@ export function AdminLessonsClient({
         const created = await createLessonMutation.mutateAsync({
           title: formTitle.trim(),
           description: formDesc,
-          hls_url: formHlsUrl.trim() || null,
+          hls_url: hlsForSave,
           youtube_id: formYoutubeId.trim() || null,
           unit: formUnit.trim() || "عام",
           duration: durationSec,
@@ -1352,7 +1432,7 @@ export function AdminLessonsClient({
                       {enableCloudflareStreamUpload ?
                         <>
                           الرفع إلى Cloudflare Stream عبر البروتوكول TUS (قابل للاستئناف)، والتحويل إلى HLS
-                          بجودات متعددة (مثل <strong>1080p و720p و480p</strong>) يتم على شبكة Stream. التشغيل
+                          بجودات متعددة (مثل <strong>1080p و720p و480p و360p</strong>) يتم على شبكة Stream. التشغيل
                           للطلاب يعتمد روابطًا موقّعة.
                         </>
                       : enableTranscoderWorkerQueue ?
@@ -1361,14 +1441,14 @@ export function AdminLessonsClient({
                           <code className="rounded bg-muted px-1" dir="ltr">
                             _source/
                           </code>{" "}
-                          ثم يُستَدعَى عامل تحويل يشغّل ffmpeg، يكتب HLS بدقّات متعددة (على سبيل المثال{" "}
-                          <strong>1080p و720p و480p</strong>) تحت مجلّد الدرس ويحدِّث التطبيق تلقائياً ثم يُنشَر
-                          الدرس.
+                          ثم يُستَدعَى عامل التحويل (<code className="rounded bg-muted px-1" dir="ltr">TRANSCODER_WORKER_URL</code>)،
+                          يشغّل ffmpeg، يكتب HLS تحت مجلدات{" "}
+                          <strong>1080p و720p و480p و360p</strong> ويُحدَّث التطبيق عبر webhook ثم يُنشَر الدرس.
                         </>
                       : enableServerVideoTranscode ?
                         <>
                           يُحوَّل على الخادم إلى HLS:{" "}
-                          <strong>1080p و720p و480p</strong>. المدة تُحدَّد تلقائياً. التحويل يحتاج ffmpeg على
+                          <strong>1080p و720p و480p و360p</strong>. المدة تُحدَّد تلقائياً. التحويل يحتاج ffmpeg على
                           السيرفر؛ خطط مثل Vercel قد توقف الفيديو الطويل قبل انتهاء التحويل.
                         </>
                       : null}
@@ -1386,18 +1466,82 @@ export function AdminLessonsClient({
                 : null}
               </div>
             : null}
+            {enableR2ServerMedia && editingLesson && !formPreview ?
+              <div className="rounded-lg border border-border p-3 space-y-3 bg-muted/20">
+                <p className="text-sm font-medium text-foreground">تخزين الفيديو على R2</p>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  مسار الدرس في الحاوية{" "}
+                  <span className="font-mono" dir="ltr">
+                    {r2BucketDisplayName ? `${r2BucketDisplayName} / ` : ""}hls/{editingLesson.id}/
+                  </span>
+                  — يُرفع المصدر إلى{" "}
+                  <code className="rounded bg-muted px-1" dir="ltr">
+                    _source/
+                  </code>
+                  ثم عامل التحويل (متغيّر البيئة{" "}
+                  <code className="rounded bg-muted px-1" dir="ltr">
+                    TRANSCODER_WORKER_URL
+                  </code>
+                  ) يُنتج مجلدات{" "}
+                  <strong>1080p و720p و480p و360p</strong> مع{" "}
+                  <code className="rounded bg-muted px-1">master.m3u8</code>. لا حاجة لنسخ الرابط يدوياً
+                  إن وُجد الـ master على هذا المسار.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={hlsBusy || saving || hlsR2ProbeBusy || hlsR2BindBusy}
+                    onClick={() => void probeLessonHlsOnR2()}
+                  >
+                    {hlsR2ProbeBusy ? "جاري القراءة…" : "قراءة الحاوية (master + الجودات)"}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={hlsBusy || saving || hlsR2ProbeBusy || hlsR2BindBusy}
+                    onClick={() => void bindStandardR2Master()}
+                  >
+                    {hlsR2BindBusy ? "جاري الربط…" : "ربط master تلقائياً في قاعدة البيانات"}
+                  </Button>
+                </div>
+                {hlsR2Layout ?
+                  <div className="text-xs space-y-1.5">
+                    <p className="text-muted-foreground">
+                      <span className="font-medium text-foreground">master.m3u8:</span>{" "}
+                      {hlsR2Layout.masterExists ?
+                        "موجود على R2"
+                      : "غير موجود بعد"}
+                    </p>
+                    <p className="text-muted-foreground">
+                      <span className="font-medium text-foreground">مجلدات الجودة المرصودة:</span>{" "}
+                      {hlsR2Layout.qualities.length ?
+                        hlsR2Layout.qualities.map((h) => `${h}p`).join("، ")
+                      : "لا يوجد (أو أسماء مختلفة عن 360p…1080p)"}
+                    </p>
+                    {hlsR2Layout.derivedMasterUrl ?
+                      <p className="font-mono break-all text-muted-foreground" dir="ltr">
+                        {hlsR2Layout.derivedMasterUrl}
+                      </p>
+                    : null}
+                  </div>
+                : null}
+              </div>
+            : null}
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground block">
-                رابط HLS (master.m3u8 على R2) — اختياري إن رفعت أعلاه
+                رابط HLS (master.m3u8) — اختياري عند الربط التلقائي من R2
               </label>
               <Input
-                placeholder="https://…/hls/{lesson}/…/master.m3u8"
+                placeholder="https://…/hls/{معرّف الدرس}/master.m3u8"
                 dir="ltr"
                 value={formHlsUrl}
                 onChange={(e) => setFormHlsUrl(e.target.value)}
               />
               <p className="text-xs text-muted-foreground leading-relaxed">
-                يمكنك لصق رابط يدوي، أو تركه فارغاً والاعتماد على الرفع من المربع أعلاه.
+                عند ترك الحقل فارغاً والحفظ: إن وُجد ملف master على المسار القياسي في الحاوية يُستنتج الرابط
+                تلقائياً. أو استخدم «ربط master تلقائياً» أعلاه.
               </p>
             </div>
             {enableR2ServerMedia &&

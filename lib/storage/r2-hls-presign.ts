@@ -3,6 +3,7 @@ import "server-only"
 import {
   DeleteObjectsCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   type GetObjectCommandOutput,
@@ -118,6 +119,77 @@ export function isUrlUnderR2PublicBase(masterUrl: string): boolean {
 
 export function lessonHlsObjectPrefix(lessonId: string): string {
   return `hls/${lessonId}`
+}
+
+/** R2 object key للـ master القياسي تحت بادئة الدرس. */
+export function lessonMasterObjectKey(lessonId: string): string {
+  return `${lessonHlsObjectPrefix(lessonId)}/master.m3u8`
+}
+
+/** رابط التشغيل العلني لـ master إن وُجد `NEXT_PUBLIC_R2_PUBLIC_BASE_URL`. */
+export function buildLessonMasterPublicUrl(lessonId: string): string | null {
+  return buildR2PublicUrlForObjectKey(lessonMasterObjectKey(lessonId))
+}
+
+/** اسم الحاوية من البيئة — للعرض في لوحة الإدارة فقط. */
+export function getR2BucketDisplayName(): string | null {
+  const b = process.env.R2_BUCKET_NAME?.trim()
+  return b || null
+}
+
+export async function r2ObjectExists(objectKey: string): Promise<boolean> {
+  if (!isR2Configured()) {
+    return false
+  }
+  const client = getS3Client()
+  const bucket = getBucket()
+  try {
+    await client.send(new HeadObjectCommand({ Bucket: bucket, Key: objectKey }))
+    return true
+  } catch (e: unknown) {
+    const status =
+      e && typeof e === "object" && "$metadata" in e
+        ? (e as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode :
+        undefined
+    const name = e && typeof e === "object" && "name" in e ? String((e as { name: string }).name) : ""
+    if (status === 404 || name === "NotFound") {
+      return false
+    }
+    throw e
+  }
+}
+
+const LESSON_HLS_QUALITY_HEIGHTS = [1080, 720, 480, 360] as const
+
+/** يكتشف وجود master ومجلدات جودة `{n}p/` (مثل 720p) داخل بادئة الدرس. */
+export async function r2InspectLessonHlsLayout(lessonId: string): Promise<{
+  masterExists: boolean
+  qualities: number[]
+}> {
+  if (!isR2Configured()) {
+    throw new Error("R2 is not configured")
+  }
+  const client = getS3Client()
+  const bucket = getBucket()
+  const prefixBase = `${lessonHlsObjectPrefix(lessonId)}/`
+
+  const masterExists = await r2ObjectExists(lessonMasterObjectKey(lessonId))
+
+  const qualities: number[] = []
+  for (const h of LESSON_HLS_QUALITY_HEIGHTS) {
+    const p = `${prefixBase}${h}p/`
+    const out = await client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: p,
+        MaxKeys: 1,
+      })
+    )
+    const has = Boolean(out.KeyCount && out.KeyCount > 0) || Boolean(out.Contents?.length)
+    if (has) qualities.push(h)
+  }
+
+  return { masterExists, qualities }
 }
 
 /** True when the stored master URL points to objects under `hls/{lessonId}/…` on this bucket. */

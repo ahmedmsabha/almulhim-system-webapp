@@ -4,6 +4,7 @@ import { isTranscoderWorkerQueueConfigured } from '@/lib/server/transcoder-worke
 import {
   isR2BrowserUploadConfigured,
   isR2Configured,
+  getR2BucketDisplayName,
 } from '@/lib/storage/r2-hls-presign';
 import { isCloudflareStreamUploadConfigured } from '@/lib/stream/cloudflare-stream';
 import { isLessonVideoTranscodeAvailable } from '@/lib/video/transcode-lesson-hls';
@@ -19,7 +20,7 @@ export default async function AdminLessonNewPage() {
       enableR2ServerMedia={isR2Configured()}
       enableServerVideoTranscode={isLessonVideoTranscodeAvailable()}
       enableTranscoderWorkerQueue={isTranscoderWorkerQueueConfigured()}
-      enableCloudflareStreamUpload={isCloudflareStreamUploadConfigured()}
+      r2BucketDisplayName={getR2BucketDisplayName()}
     />
   );
 }

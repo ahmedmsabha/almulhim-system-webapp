@@ -2,7 +2,7 @@ import "server-only"
 
 import { execFile, execFileSync, spawn } from "node:child_process"
 import { promisify } from "node:util"
-import { mkdtemp, readdir, rm } from "node:fs/promises"
+import { mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
 
@@ -139,6 +139,27 @@ async function walkFiles(dir: string): Promise<string[]> {
   return out
 }
 
+async function renameFfmpegVariantDirsToResolutionLabels(outDirAbs: string): Promise<void> {
+  const mapping: Array<[string, string]> = [
+    ["v0", "1080p"],
+    ["v1", "720p"],
+    ["v2", "480p"],
+    ["v3", "360p"],
+  ]
+  for (const [from, to] of mapping) {
+    await rename(join(outDirAbs, from), join(outDirAbs, to))
+  }
+  const masterPath = join(outDirAbs, "master.m3u8")
+  let text = await readFile(masterPath, "utf8")
+  for (const [from, to] of mapping) {
+    const needle = `${from}/`
+    const repl = `${to}/`
+    if (!text.includes(needle)) continue
+    text = text.split(needle).join(repl)
+  }
+  await writeFile(masterPath, text, "utf8")
+}
+
 export function assertValidSourceRelativePath(raw: string): string {
   const n = raw.replace(/\\/g, "/").replace(/^\/+/, "").trim()
   if (!n.startsWith("_source/") || n.includes("..")) {
@@ -201,10 +222,11 @@ export async function transcodeLessonSourceOnServer(
 
     args.push(
       "-filter_complex",
-      "[0:v]split=3[v1080][v720][v480];" +
+      "[0:v]split=4[v1080][v720][v480][v360];" +
         "[v1080]scale=-2:1080:flags=lanczos,setsar=1[v1080s];" +
         "[v720]scale=-2:720:flags=lanczos,setsar=1[v720s];" +
-        "[v480]scale=-2:480:flags=lanczos,setsar=1[v480s]"
+        "[v480]scale=-2:480:flags=lanczos,setsar=1[v480s];" +
+        "[v360]scale=-2:360:flags=lanczos,setsar=1[v360s]"
     )
 
     if (hasAudio) {
@@ -219,6 +241,10 @@ export async function transcodeLessonSourceOnServer(
         "0:a:0?",
         "-map",
         "[v480s]",
+        "-map",
+        "0:a:0?",
+        "-map",
+        "[v360s]",
         "-map",
         "0:a:0?",
         "-c:v:0",
@@ -257,6 +283,18 @@ export async function transcodeLessonSourceOnServer(
         "1200k",
         "-bufsize:v:2",
         "2400k",
+        "-c:v:3",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-b:v:3",
+        "650k",
+        "-maxrate:v:3",
+        "800k",
+        "-bufsize:v:3",
+        "1600k",
         "-c:a:0",
         "aac",
         "-b:a:0",
@@ -268,6 +306,10 @@ export async function transcodeLessonSourceOnServer(
         "-c:a:2",
         "aac",
         "-b:a:2",
+        "96k",
+        "-c:a:3",
+        "aac",
+        "-b:a:3",
         "96k"
       )
     } else {
@@ -278,6 +320,8 @@ export async function transcodeLessonSourceOnServer(
         "[v720s]",
         "-map",
         "[v480s]",
+        "-map",
+        "[v360s]",
         "-c:v:0",
         "libx264",
         "-preset",
@@ -313,7 +357,19 @@ export async function transcodeLessonSourceOnServer(
         "-maxrate:v:2",
         "1200k",
         "-bufsize:v:2",
-        "2400k"
+        "2400k",
+        "-c:v:3",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-b:v:3",
+        "650k",
+        "-maxrate:v:3",
+        "800k",
+        "-bufsize:v:3",
+        "1600k"
       )
     }
 
@@ -333,11 +389,12 @@ export async function transcodeLessonSourceOnServer(
       "-hls_segment_filename",
       "v%v/seg%03d.ts",
       "-var_stream_map",
-      hasAudio ? "v:0,a:0 v:1,a:1 v:2,a:2" : "v:0 v:1 v:2",
+      hasAudio ? "v:0,a:0 v:1,a:1 v:2,a:2 v:3,a:3" : "v:0 v:1 v:2 v:3",
       "v%v/index.m3u8"
     )
 
     await runFfmpeg(args, outDir)
+    await renameFfmpegVariantDirsToResolutionLabels(outDir)
 
     const files = await walkFiles(outDir)
     if (!files.length) {
