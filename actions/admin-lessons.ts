@@ -67,6 +67,24 @@ export async function adminUpdateVideo(
   }
 }
 
+export async function adminGetVideoById(
+  id: string,
+): Promise<ActionResult<VideoLesson | null>> {
+  try {
+    const gate = await requireAdmin()
+    if (!gate.success) {
+      return actionFailure(gate.error, gate.code)
+    }
+    const data = await getVideoById(id)
+    if (!data) {
+      return actionFailure("الدرس غير موجود", "NOT_FOUND")
+    }
+    return actionSuccess(data)
+  } catch (e) {
+    return mapCaughtErrorToAction(e)
+  }
+}
+
 export async function adminRemoveVideo(
   videoId: string
 ): Promise<ActionResult<{ ok: true; r2Removed?: number }>> {

@@ -33,6 +33,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog"
+import { AdminUploadOverlay } from "@/components/admin/admin-upload-overlay"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import {
@@ -53,12 +54,11 @@ import {
   adminFinalizeStreamLesson,
   adminCreateStreamUploadUrl,
 } from "@/actions/admin-media-stream"
-import { adminQueueTranscodeJob } from "@/actions/admin-media-transcode-queue"
 import {
   adminPresignLessonSourceVideoUpload,
   adminTranscodeLessonUploadedVideo,
 } from "@/actions/admin-media-video-source"
-import { AdminUploadOverlay } from "@/components/admin/admin-upload-overlay"
+import { AdminLessonVideoWizard } from "@/components/admin/admin-lesson-video-wizard"
 import { Checkbox } from "@/components/ui/checkbox"
 import { collectFilesWithRelativePathsFromDrop } from "@/lib/client/collect-files-from-data-transfer"
 import { xhrPutBlob } from "@/lib/client/admin-upload-xhr"
@@ -161,6 +161,7 @@ export function AdminLessonsClient({
   const queryClient = useQueryClient()
   const rawR2TranscodeAvailable =
     enableServerVideoTranscode || enableTranscoderWorkerQueue
+  const workerOnlyVideoUi = enableTranscoderWorkerQueue
 
   const { data: lessons = initialLessons } = useQuery({
     queryKey: queryKeys.adminLessons(),
@@ -291,6 +292,7 @@ export function AdminLessonsClient({
   const [formYoutubeId, setFormYoutubeId] = useState("")
   const [formUnit, setFormUnit] = useState("عام")
   const [formDurationMin, setFormDurationMin] = useState("30")
+  const [formOrder, setFormOrder] = useState("0")
   const [formPreview, setFormPreview] = useState(false)
   const [saving, setSaving] = useState(false)
   const [hlsUploadOverlay, setHlsUploadOverlay] = useState<{
@@ -356,8 +358,8 @@ export function AdminLessonsClient({
     setFormYoutubeId("")
     setFormUnit("عام")
     setFormDurationMin("30")
+    setFormOrder("0")
     setFormPreview(false)
-    setShowAddDialog(true)
   }, [autoOpenCreate])
 
   useEffect(() => {
@@ -431,6 +433,7 @@ export function AdminLessonsClient({
         setFormDesc((d) => (d.trim() ? d : res.data!.description ?? ""))
         setFormUnit(res.data!.unit || "عام")
         setFormDurationMin(String(Math.max(1, Math.round(res.data!.duration / 60))))
+        setFormOrder(String(res.data!.order ?? 0))
         void queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
       } catch (e) {
         console.error("mediaDraft: adminCreateVideo threw", e)
@@ -466,33 +469,35 @@ export function AdminLessonsClient({
     setEditingLesson(null)
     setMediaDraftFlow(false)
     setMediaDraftError(null)
+    setMediaDraftCreating(false)
     setFormTitle("")
     setFormDesc("")
     setFormHlsUrl("")
     setFormYoutubeId("")
     setFormUnit("عام")
     setFormDurationMin("30")
+    setFormOrder("0")
     setFormPreview(false)
     setHlsVariantRows([])
     setHlsVariantSelected(new Set())
     setShowAddDialog(true)
   }
 
-  const openEdit = (l: VideoLesson) => {
+  const openEdit = (lesson: VideoLesson) => {
     mediaDraftSeqRef.current += 1
+    setShowAddDialog(false)
     setMediaDraftFlow(false)
     setMediaDraftError(null)
-    setEditingLesson(l)
-    setFormTitle(l.title)
-    setFormDesc(l.description)
-    setFormHlsUrl(l.hls_url ?? "")
-    setFormYoutubeId(l.youtube_id ?? "")
-    setFormUnit(l.unit)
-    setFormDurationMin(String(Math.max(1, Math.round(l.duration / 60))))
-    setFormPreview(l.is_preview)
-    setHlsVariantRows([])
-    setHlsVariantSelected(new Set())
-    setShowAddDialog(true)
+    setMediaDraftCreating(false)
+    setEditingLesson(lesson)
+    setFormTitle(lesson.title)
+    setFormDesc(lesson.description ?? "")
+    setFormHlsUrl(lesson.hls_url ?? "")
+    setFormYoutubeId(lesson.youtube_id ?? "")
+    setFormUnit(lesson.unit || "عام")
+    setFormDurationMin(String(Math.max(1, Math.round(lesson.duration / 60))))
+    setFormOrder(String(lesson.order ?? 0))
+    setFormPreview(lesson.is_preview)
   }
 
   const filteredLessons = lessons.filter((lesson) => {
@@ -647,6 +652,9 @@ export function AdminLessonsClient({
       return
     }
     if (formPreview) return
+    if (enableTranscoderWorkerQueue) {
+      return
+    }
     const looksVideo =
       (file.type && file.type.startsWith("video/")) ||
       /\.(mp4|mov|webm|mkv|avi|m4v)$/i.test(file.name)
@@ -665,10 +673,13 @@ export function AdminLessonsClient({
       setFormDurationMin(String(Math.max(1, Math.ceil(metaDur / 60))))
     }
 
+    const uploadTitle = "رفع الفيديو إلى R2"
+    const uploadSubtitleStart = "جاري طلب رابط الرفع…"
+
     setHlsUploadOverlay({
       pct: 5,
-      title: "رفع الفيديو إلى R2",
-      subtitle: "جاري طلب رابط الرفع…",
+      title: uploadTitle,
+      subtitle: uploadSubtitleStart,
     })
 
     try {
@@ -687,41 +698,11 @@ export function AdminLessonsClient({
       await xhrPutBlob(signedUrl, file, contentType, (loaded, total) => {
         const ratio = Math.min(1, loaded / Math.max(total, 1))
         setHlsUploadOverlay({
-          pct: Math.min(42, 5 + Math.round(ratio * 37)),
-          title: "رفع الفيديو إلى R2",
+          pct: Math.min(88, 5 + Math.round(ratio * 83)),
+          title: uploadTitle,
           subtitle: `${Math.round(ratio * 100)}%`,
         })
       })
-
-      if (enableTranscoderWorkerQueue) {
-        setHlsUploadOverlay({
-          pct: 48,
-          title: "طرح مهمة التحويل",
-          subtitle: "إرسال الطلب إلى عامل ffmpeg خارجي…",
-        })
-
-        const sourceR2Key = `hls/${lessonId}/${relativePath}`
-        const qr = await adminQueueTranscodeJob({ lessonId, sourceR2Key })
-        if (!qr.success) {
-          toast.error(qr.error)
-          return
-        }
-
-        setHlsUploadOverlay({
-          pct: 100,
-          title: "تم الطلب",
-          subtitle: "سيتم ضبط رابط master والنشر تلقائياً بعد اكتمال التحويل",
-        })
-        await new Promise((r) => setTimeout(r, 400))
-
-        toast.success("تم رفع المصدر وإطلاق مهمة تحويل في الخلفية")
-        try {
-          await queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
-        } catch {
-          /* ignore */
-        }
-        return
-      }
 
       if (!enableServerVideoTranscode) {
         toast.error("لا عميل تحويل متاح: فعّل TRANSCODER_WORKER_URL أو ffmpeg على الخادم")
@@ -884,7 +865,7 @@ export function AdminLessonsClient({
       )
       return
     }
-    if (enableCloudflareStreamUpload) {
+    if (enableCloudflareStreamUpload && !enableTranscoderWorkerQueue) {
       await runStreamVideoUpload(file, lessonId)
     } else {
       await runRawVideoUploadAndTranscode(file, lessonId)
@@ -902,7 +883,7 @@ export function AdminLessonsClient({
       toast.error("أسقط ملف فيديو واحداً")
       return
     }
-    if (enableCloudflareStreamUpload) {
+    if (enableCloudflareStreamUpload && !enableTranscoderWorkerQueue) {
       await runStreamVideoUpload(f)
     } else {
       await runRawVideoUploadAndTranscode(f)
@@ -1007,8 +988,11 @@ export function AdminLessonsClient({
   }
 
   const saveDialog = async () => {
-    const dm = parseInt(formDurationMin, 10)
-    const durationSec = Number.isFinite(dm) ? dm * 60 : 0
+    const orderNum = parseInt(formOrder, 10)
+    const order = Number.isFinite(orderNum) && orderNum >= 0 ? orderNum : 0
+    const durationMinNum = parseInt(formDurationMin, 10)
+    const durationSec =
+      Math.max(60, (Number.isFinite(durationMinNum) && durationMinNum > 0 ? durationMinNum : 30) * 60)
     const keepOpen =
       (enableR2LessonUpload || rawR2TranscodeAvailable || enableCloudflareStreamUpload) && !formPreview
 
@@ -1036,8 +1020,8 @@ export function AdminLessonsClient({
             youtube_id: formYoutubeId.trim() || null,
             unit: formUnit.trim() || "عام",
             duration: durationSec,
+            order,
             is_preview: formPreview,
-            ...(mediaDraftFlow ? { is_published: true } : {}),
           },
         })
         if (mediaDraftFlow) {
@@ -1060,6 +1044,7 @@ export function AdminLessonsClient({
           youtube_id: formYoutubeId.trim() || null,
           unit: formUnit.trim() || "عام",
           duration: durationSec,
+          order,
           is_preview: formPreview,
           is_published: true,
         })
@@ -1274,8 +1259,68 @@ export function AdminLessonsClient({
                 onChange={(e) => setFormDesc(e.target.value)}
               />
             </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground block">ترتيب العرض</label>
+              <Input
+                type="number"
+                min={0}
+                step={1}
+                value={formOrder}
+                onChange={(e) => setFormOrder(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">رقم أصغر يظهر أولاً في قائمة الدروس</p>
+            </div>
             {(enableR2LessonUpload || rawR2TranscodeAvailable || enableCloudflareStreamUpload) &&
-            !formPreview ?
+            !formPreview &&
+            workerOnlyVideoUi ?
+              <div className="space-y-3">
+                {mediaDraftError && !editingLesson ?
+                  <div
+                    dir="rtl"
+                    className="rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-2.5 space-y-2"
+                  >
+                    <p className="text-sm text-destructive font-medium leading-relaxed">{mediaDraftError}</p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      disabled={mediaDraftCreating}
+                      onClick={() => setMediaDraftRetryNonce((n) => n + 1)}
+                    >
+                      {mediaDraftCreating ?
+                        <>
+                          <Loader2 className="h-4 w-4 ml-2 animate-spin" />
+                          جاري المحاولة…
+                        </>
+                      : "إعادة المحاولة"}
+                    </Button>
+                  </div>
+                : null}
+                {mediaDraftCreating && !mediaDraftError ?
+                  <div className="rounded-lg border border-dashed border-border p-3 space-y-3 bg-muted/30 min-h-[124px] flex flex-col items-center justify-center gap-2">
+                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    <div className="h-2 w-full max-w-[260px] rounded bg-muted/80 animate-pulse" />
+                    <p className="text-xs text-muted-foreground">جاري تجهيز الدرس…</p>
+                  </div>
+                : null}
+                {editingLesson && !mediaDraftCreating ?
+                  <AdminLessonVideoWizard
+                    lessonId={editingLesson.id}
+                    hlsUrl={formHlsUrl.trim() ? formHlsUrl : editingLesson.hls_url}
+                    disabled={saving}
+                    onVideoLinked={(lesson) => {
+                      setEditingLesson(lesson)
+                      setFormHlsUrl(lesson.hls_url ?? "")
+                      toast.success("✓ تم ربط الفيديو بنجاح")
+                      void queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
+                    }}
+                  />
+                : null}
+              </div>
+            : null}
+            {(enableR2LessonUpload || rawR2TranscodeAvailable || enableCloudflareStreamUpload) &&
+            !formPreview &&
+            !workerOnlyVideoUi ?
               <div className="space-y-3 rounded-lg border border-border bg-muted/15 p-3">
                 <p className="text-sm font-semibold text-foreground">رفع الفيديو هنا</p>
                 {enableR2LessonUpload && !r2PublicPlaybackReady ?
@@ -1421,8 +1466,6 @@ export function AdminLessonsClient({
                       فيديو خام{" "}
                       {enableCloudflareStreamUpload ?
                         "(Cloudflare Stream)"
-                      : enableTranscoderWorkerQueue ?
-                        "(عامل خارجي)"
                       : enableServerVideoTranscode ?
                         "(ffmpeg محلّياً)"
                       : ""}{" "}
@@ -1434,16 +1477,6 @@ export function AdminLessonsClient({
                           الرفع إلى Cloudflare Stream عبر البروتوكول TUS (قابل للاستئناف)، والتحويل إلى HLS
                           بجودات متعددة (مثل <strong>1080p و720p و480p و360p</strong>) يتم على شبكة Stream. التشغيل
                           للطلاب يعتمد روابطًا موقّعة.
-                        </>
-                      : enableTranscoderWorkerQueue ?
-                        <>
-                          يُرفع الناتج إلى مسار المصدر تحت{" "}
-                          <code className="rounded bg-muted px-1" dir="ltr">
-                            _source/
-                          </code>{" "}
-                          ثم يُستَدعَى عامل التحويل (<code className="rounded bg-muted px-1" dir="ltr">TRANSCODER_WORKER_URL</code>)،
-                          يشغّل ffmpeg، يكتب HLS تحت مجلدات{" "}
-                          <strong>1080p و720p و480p و360p</strong> ويُحدَّث التطبيق عبر webhook ثم يُنشَر الدرس.
                         </>
                       : enableServerVideoTranscode ?
                         <>
@@ -1466,7 +1499,7 @@ export function AdminLessonsClient({
                 : null}
               </div>
             : null}
-            {enableR2ServerMedia && editingLesson && !formPreview ?
+            {enableR2ServerMedia && editingLesson && !formPreview && !workerOnlyVideoUi ?
               <div className="rounded-lg border border-border p-3 space-y-3 bg-muted/20">
                 <p className="text-sm font-medium text-foreground">تخزين الفيديو على R2</p>
                 <p className="text-xs text-muted-foreground leading-relaxed">
@@ -1529,24 +1562,27 @@ export function AdminLessonsClient({
                 : null}
               </div>
             : null}
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground block">
-                رابط HLS (master.m3u8) — اختياري عند الربط التلقائي من R2
-              </label>
-              <Input
-                placeholder="https://…/hls/{معرّف الدرس}/master.m3u8"
-                dir="ltr"
-                value={formHlsUrl}
-                onChange={(e) => setFormHlsUrl(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                عند ترك الحقل فارغاً والحفظ: إن وُجد ملف master على المسار القياسي في الحاوية يُستنتج الرابط
-                تلقائياً. أو استخدم «ربط master تلقائياً» أعلاه.
-              </p>
-            </div>
+            {!workerOnlyVideoUi ?
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground block">
+                  رابط HLS (master.m3u8) — اختياري عند الربط التلقائي من R2
+                </label>
+                <Input
+                  placeholder="https://…/hls/{معرّف الدرس}/master.m3u8"
+                  dir="ltr"
+                  value={formHlsUrl}
+                  onChange={(e) => setFormHlsUrl(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  عند ترك الحقل فارغاً والحفظ: إن وُجد ملف master على المسار القياسي في الحاوية يُستنتج الرابط
+                  تلقائياً. أو استخدم «ربط master تلقائياً» أعلاه.
+                </p>
+              </div>
+            : null}
             {enableR2ServerMedia &&
             editingLesson &&
             !formPreview &&
+            !workerOnlyVideoUi &&
             formHlsUrl.trim() &&
             !looksLikeCloudflareStreamHlsMaster(formHlsUrl) ?
               <div className="rounded-lg border border-border p-3 space-y-3 bg-muted/20">
@@ -1608,61 +1644,67 @@ export function AdminLessonsClient({
                 : null}
               </div>
             : null}
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground block">
-                معرّف يوتيوب (معاينات فقط)
-              </label>
-              <Input
-                placeholder="مثال: dQw4w9WgXcQ"
-                dir="ltr"
-                value={formYoutubeId}
-                onChange={(e) => setFormYoutubeId(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                استخدم مع «درس معاينة»؛ يعرض اليوتيوب بدلاً من HLS.
-              </p>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="text-sm font-medium text-foreground mb-1.5 block">الوحدة</label>
-                <Input
-                  list="lesson-units"
-                  value={formUnit}
-                  onChange={(e) => setFormUnit(e.target.value)}
-                />
-                <datalist id="lesson-units">
-                  {units.map((u) => (
-                    <option key={u} value={u} />
-                  ))}
-                </datalist>
-              </div>
-              <div>
-                <label className="text-sm font-medium text-foreground mb-1.5 block">
-                  المدة (دقائق)
+            {!workerOnlyVideoUi ?
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground block">
+                  معرّف يوتيوب (معاينات فقط)
                 </label>
                 <Input
-                  type="number"
-                  min={1}
-                  value={formDurationMin}
-                  onChange={(e) => setFormDurationMin(e.target.value)}
+                  placeholder="مثال: dQw4w9WgXcQ"
+                  dir="ltr"
+                  value={formYoutubeId}
+                  onChange={(e) => setFormYoutubeId(e.target.value)}
                 />
-                <p className="text-xs text-muted-foreground mt-1">
-                  عند اختيار فيديو خام للرفع والتحويل تُملأ المدة تلقائياً من الملف؛ يمكنك تعديلها يدوياً.
+                <p className="text-xs text-muted-foreground">
+                  استخدم مع «درس معاينة»؛ يعرض اليوتيوب بدلاً من HLS.
                 </p>
               </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <input
-                type="checkbox"
-                id="isFree"
-                className="h-4 w-4 rounded border-gray-300"
-                checked={formPreview}
-                onChange={(e) => setFormPreview(e.target.checked)}
-              />
-              <label htmlFor="isFree" className="text-sm text-foreground">
-                درس معاينة (ظاهر بدون اشتراك كامل)
-              </label>
-            </div>
+            : null}
+            {!workerOnlyVideoUi ?
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-1.5 block">الوحدة</label>
+                  <Input
+                    list="lesson-units"
+                    value={formUnit}
+                    onChange={(e) => setFormUnit(e.target.value)}
+                  />
+                  <datalist id="lesson-units">
+                    {units.map((u) => (
+                      <option key={u} value={u} />
+                    ))}
+                  </datalist>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-1.5 block">
+                    المدة (دقائق)
+                  </label>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={formDurationMin}
+                    onChange={(e) => setFormDurationMin(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    عند اختيار فيديو خام للرفع والتحويل تُملأ المدة تلقائياً من الملف؛ يمكنك تعديلها يدوياً.
+                  </p>
+                </div>
+              </div>
+            : null}
+            {!workerOnlyVideoUi ?
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  id="isFree"
+                  className="h-4 w-4 rounded border-gray-300"
+                  checked={formPreview}
+                  onChange={(e) => setFormPreview(e.target.checked)}
+                />
+                <label htmlFor="isFree" className="text-sm text-foreground">
+                  درس معاينة (ظاهر بدون اشتراك كامل)
+                </label>
+              </div>
+            : null}
           </div>
           <DialogFooter className="gap-2">
             <Button
