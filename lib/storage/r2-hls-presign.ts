@@ -43,6 +43,18 @@ export function isR2BrowserUploadConfigured(): boolean {
   return isR2Configured() && Boolean(getR2PublicBaseUrl())
 }
 
+/** Builds the public CDN URL for an object key using `NEXT_PUBLIC_R2_PUBLIC_BASE_URL`. */
+export function buildR2PublicUrlForObjectKey(objectKey: string): string | null {
+  const base = getR2PublicBaseUrl()
+  if (!base) return null
+  const path = objectKey
+    .split("/")
+    .filter(Boolean)
+    .map((s) => encodeURIComponent(s))
+    .join("/")
+  return `${base.replace(/\/$/, "")}/${path}`
+}
+
 export async function presignR2PutObject(
   objectKey: string,
   contentType: string,

@@ -15,6 +15,7 @@ import {
   Trash2,
   Clock,
   Lock,
+  Loader2,
   Unlock,
   Video,
 } from "lucide-react"
@@ -47,6 +48,11 @@ import {
   adminSaveLessonHlsVariants,
 } from "@/actions/admin-media-hls"
 import {
+  adminFinalizeStreamLesson,
+  adminCreateStreamUploadUrl,
+} from "@/actions/admin-media-stream"
+import { adminQueueTranscodeJob } from "@/actions/admin-media-transcode-queue"
+import {
   adminPresignLessonSourceVideoUpload,
   adminTranscodeLessonUploadedVideo,
 } from "@/actions/admin-media-video-source"
@@ -56,6 +62,13 @@ import { collectFilesWithRelativePathsFromDrop } from "@/lib/client/collect-file
 import { xhrPutBlob } from "@/lib/client/admin-upload-xhr"
 import { queryKeys } from "@/lib/query-keys"
 import type { VideoLesson } from "@/types"
+import { Upload } from "tus-js-client"
+
+function looksLikeCloudflareStreamHlsMaster(url: string): boolean {
+  return /^https:\/\/customer-[^.]+\.cloudflarestream\.com\/.+\/manifest\/video\.m3u8/i.test(
+    url.trim()
+  )
+}
 
 function normalizeRelativePath(raw: string): string {
   return raw.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+/g, "/").trim()
@@ -103,13 +116,27 @@ function probeDurationFromVideoFile(file: File): Promise<number | null> {
   })
 }
 
+/** Cloudflare tus chunk size aligned to 256 KiB; files ≤5 MiB upload in one chunk. */
+function pickStreamTusChunkSize(fileSize: number): number {
+  const MIN = 5242880
+  const MAX = 209715200
+  const UNIT = 256 * 1024
+  if (fileSize <= MIN) return fileSize
+  const capped = Math.min(fileSize, MAX)
+  const pref = Math.min(50 * 1024 * 1024, capped)
+  const rounded = Math.floor(pref / UNIT) * UNIT
+  return Math.max(MIN, rounded)
+}
+
 export function AdminLessonsClient({
   initialLessons,
   autoOpenCreate = false,
   enableR2LessonUpload = false,
   r2PublicPlaybackReady = false,
   enableR2ServerMedia = false,
-  enableVideoTranscode = false,
+  enableServerVideoTranscode = false,
+  enableTranscoderWorkerQueue = false,
+  enableCloudflareStreamUpload = false,
 }: {
   initialLessons: VideoLesson[]
   autoOpenCreate?: boolean
@@ -119,10 +146,16 @@ export function AdminLessonsClient({
   r2PublicPlaybackReady?: boolean
   /** قراءة/كتابة master ومسح الملفات يعتمد على مفاتيح R2 على الخادم */
   enableR2ServerMedia?: boolean
-  /** رفع فيديو خام + ffmpeg على الخادم (يتطلب ffmpeg على الخادم) */
-  enableVideoTranscode?: boolean
+  /** رفع فيديو خام + ffmpeg على هذا الخادم (يتطلب ffmpeg) */
+  enableServerVideoTranscode?: boolean
+  /** صف تحويل خارجي (عامل Railway/VM) بعد الرفع إلى R2 */
+  enableTranscoderWorkerQueue?: boolean
+  /** رفع فيديو خام عبر Cloudflare Stream (tus)، بدون ffmpeg على الخادم */
+  enableCloudflareStreamUpload?: boolean
 }) {
   const queryClient = useQueryClient()
+  const rawR2TranscodeAvailable =
+    enableServerVideoTranscode || enableTranscoderWorkerQueue
 
   const { data: lessons = initialLessons } = useQuery({
     queryKey: queryKeys.adminLessons(),
@@ -272,12 +305,39 @@ export function AdminLessonsClient({
   /** مُنشأ تلقائياً للرفع قبل أول «حفظ»؛ عند الإلغاء يُحذف إن لم يُرفع وسيط */
   const [mediaDraftFlow, setMediaDraftFlow] = useState(false)
   const [mediaDraftCreating, setMediaDraftCreating] = useState(false)
+  const [mediaDraftError, setMediaDraftError] = useState<string | null>(null)
+  const [mediaDraftRetryNonce, setMediaDraftRetryNonce] = useState(0)
   const mediaDraftSeqRef = useRef(0)
+  const editingLessonRef = useRef<VideoLesson | null>(null)
+
+  useEffect(() => {
+    editingLessonRef.current = editingLesson
+  }, [editingLesson])
+
+  function waitForEditingLessonId(timeoutMs = 5000, intervalMs = 100): Promise<string | null> {
+    const deadline = Date.now() + timeoutMs
+    return new Promise((resolve) => {
+      const tick = () => {
+        const id = editingLessonRef.current?.id
+        if (id) {
+          resolve(id)
+          return
+        }
+        if (Date.now() >= deadline) {
+          resolve(null)
+          return
+        }
+        window.setTimeout(tick, intervalMs)
+      }
+      tick()
+    })
+  }
 
   useEffect(() => {
     if (!autoOpenCreate) return
     setEditingLesson(null)
     setMediaDraftFlow(false)
+    setMediaDraftError(null)
     setFormTitle("")
     setFormDesc("")
     setFormHlsUrl("")
@@ -313,6 +373,7 @@ export function AdminLessonsClient({
     }
     setMediaDraftFlow(false)
     setMediaDraftCreating(false)
+    setMediaDraftError(null)
     setShowAddDialog(false)
     setEditingLesson(null)
   }
@@ -321,11 +382,12 @@ export function AdminLessonsClient({
   useEffect(() => {
     if (!showAddDialog) return
     if (editingLesson || formPreview) return
-    if (!enableR2LessonUpload && !enableVideoTranscode) return
+    if (!enableR2LessonUpload && !rawR2TranscodeAvailable && !enableCloudflareStreamUpload) return
 
     const seq = ++mediaDraftSeqRef.current
     let cancelled = false
     setMediaDraftCreating(true)
+    setMediaDraftError(null)
 
     ;(async () => {
       try {
@@ -339,16 +401,28 @@ export function AdminLessonsClient({
           is_preview: false,
           is_published: false,
         })
-        if (cancelled || seq !== mediaDraftSeqRef.current || !res.success || !res.data) return
+        if (cancelled || seq !== mediaDraftSeqRef.current) return
+        if (!res.success) {
+          console.error("mediaDraft: adminCreateVideo failed", res)
+          setMediaDraftError(res.error)
+          toast.error(res.error)
+          return
+        }
         setEditingLesson(res.data)
         setMediaDraftFlow(true)
+        setMediaDraftError(null)
         setFormTitle((t) => (t.trim() ? t : res.data!.title))
         setFormDesc((d) => (d.trim() ? d : res.data!.description ?? ""))
         setFormUnit(res.data!.unit || "عام")
         setFormDurationMin(String(Math.max(1, Math.round(res.data!.duration / 60))))
         void queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
       } catch (e) {
-        toast.error(e instanceof Error ? e.message : "تعذّر تجهيز الدرس للرفع")
+        console.error("mediaDraft: adminCreateVideo threw", e)
+        const msg = e instanceof Error ? e.message : "تعذّر تجهيز الدرس للرفع"
+        if (!cancelled && seq === mediaDraftSeqRef.current) {
+          setMediaDraftError(msg)
+        }
+        toast.error(msg)
       } finally {
         if (!cancelled && seq === mediaDraftSeqRef.current) {
           setMediaDraftCreating(false)
@@ -359,12 +433,23 @@ export function AdminLessonsClient({
     return () => {
       cancelled = true
     }
-  }, [showAddDialog, editingLesson, formPreview, enableR2LessonUpload, enableVideoTranscode, queryClient])
+  }, [
+    showAddDialog,
+    editingLesson,
+    formPreview,
+    enableR2LessonUpload,
+    enableServerVideoTranscode,
+    enableTranscoderWorkerQueue,
+    enableCloudflareStreamUpload,
+    queryClient,
+    mediaDraftRetryNonce,
+  ])
 
   const openAdd = () => {
     mediaDraftSeqRef.current += 1
     setEditingLesson(null)
     setMediaDraftFlow(false)
+    setMediaDraftError(null)
     setFormTitle("")
     setFormDesc("")
     setFormHlsUrl("")
@@ -380,6 +465,7 @@ export function AdminLessonsClient({
   const openEdit = (l: VideoLesson) => {
     mediaDraftSeqRef.current += 1
     setMediaDraftFlow(false)
+    setMediaDraftError(null)
     setEditingLesson(l)
     setFormTitle(l.title)
     setFormDesc(l.description)
@@ -399,8 +485,8 @@ export function AdminLessonsClient({
     return matchesSearch && matchesUnit
   })
 
-  const runHlsFolderUpload = async (list: File[]) => {
-    const lessonId = editingLesson?.id
+  const runHlsFolderUpload = async (list: File[], lessonIdOverride?: string) => {
+    const lessonId = lessonIdOverride ?? editingLesson?.id
     if (!lessonId) return
 
     const files = Array.from(list).filter(
@@ -512,11 +598,17 @@ export function AdminLessonsClient({
     const list = e.target.files
     e.target.value = ""
     if (!list?.length) return
-    if (!editingLesson?.id) {
-      toast.error("احفظ الدرس أولاً ليُنشأ معرّف ثابت")
+    let lessonId = editingLessonRef.current?.id
+    if (!lessonId) {
+      lessonId = (await waitForEditingLessonId()) ?? undefined
+    }
+    if (!lessonId) {
+      toast.error(
+        "تعذّر جاهزية معرّف الدرس بعد الانتظار. استخدم «إعادة المحاولة» في مربع الرفع أو أغلق النافذة وأعد فتحها."
+      )
       return
     }
-    await runHlsFolderUpload(Array.from(list))
+    await runHlsFolderUpload(Array.from(list), lessonId)
   }
 
   const handleHlsDrop = async (e: React.DragEvent<HTMLDivElement>) => {
@@ -532,8 +624,8 @@ export function AdminLessonsClient({
     await runHlsFolderUpload(collected)
   }
 
-  const runRawVideoUploadAndTranscode = async (file: File) => {
-    const lessonId = editingLesson?.id
+  const runRawVideoUploadAndTranscode = async (file: File, lessonIdOverride?: string) => {
+    const lessonId = lessonIdOverride ?? editingLesson?.id
     if (!lessonId) {
       toast.error("احفظ الدرس أولاً ليُنشأ معرّف ثابت")
       return
@@ -585,6 +677,41 @@ export function AdminLessonsClient({
         })
       })
 
+      if (enableTranscoderWorkerQueue) {
+        setHlsUploadOverlay({
+          pct: 48,
+          title: "طرح مهمة التحويل",
+          subtitle: "إرسال الطلب إلى عامل ffmpeg خارجي…",
+        })
+
+        const sourceR2Key = `hls/${lessonId}/${relativePath}`
+        const qr = await adminQueueTranscodeJob({ lessonId, sourceR2Key })
+        if (!qr.success) {
+          toast.error(qr.error)
+          return
+        }
+
+        setHlsUploadOverlay({
+          pct: 100,
+          title: "تم الطلب",
+          subtitle: "سيتم ضبط رابط master والنشر تلقائياً بعد اكتمال التحويل",
+        })
+        await new Promise((r) => setTimeout(r, 400))
+
+        toast.success("تم رفع المصدر وإطلاق مهمة تحويل في الخلفية")
+        try {
+          await queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
+        } catch {
+          /* ignore */
+        }
+        return
+      }
+
+      if (!enableServerVideoTranscode) {
+        toast.error("لا عميل تحويل متاح: فعّل TRANSCODER_WORKER_URL أو ffmpeg على الخادم")
+        return
+      }
+
       setHlsUploadOverlay({
         pct: 48,
         title: "تحويل الفيديو إلى HLS",
@@ -624,25 +751,146 @@ export function AdminLessonsClient({
     }
   }
 
+  const runStreamVideoUpload = async (file: File, lessonIdOverride?: string) => {
+    const lessonId = lessonIdOverride ?? editingLesson?.id
+    if (!lessonId) {
+      toast.error("احفظ الدرس أولاً ليُنشأ معرّف ثابت")
+      return
+    }
+    if (formPreview) return
+    const looksVideo =
+      (file.type && file.type.startsWith("video/")) ||
+      /\.(mp4|mov|webm|mkv|avi|m4v)$/i.test(file.name)
+    if (!file.size || !looksVideo) {
+      toast.error("اختر ملف فيديو صالحاً (mp4، mov، webm…)")
+      return
+    }
+    const maxBytes = 4 * 1024 * 1024 * 1024
+    if (file.size > maxBytes) {
+      toast.error("الحد الأقصى لحجم الملف 4 غيغابايت")
+      return
+    }
+
+    const metaDur = await probeDurationFromVideoFile(file)
+    if (metaDur != null) {
+      setFormDurationMin(String(Math.max(1, Math.ceil(metaDur / 60))))
+    }
+
+    setHlsUploadOverlay({
+      pct: 4,
+      title: "تهيئة رفع Stream",
+      subtitle: "طلب عنوان الرفع القابل للاستئناف…",
+    })
+
+    try {
+      const slot = await adminCreateStreamUploadUrl({
+        lessonId,
+        fileSizeBytes: file.size,
+        fileName: file.name,
+        contentType: file.type || "application/octet-stream",
+      })
+      if (!slot.success) {
+        toast.error(slot.error)
+        return
+      }
+
+      const { uploadUrl, videoUid } = slot.data
+
+      await new Promise<void>((resolve, reject) => {
+        const upload = new Upload(file, {
+          uploadUrl,
+          uploadSize: file.size,
+          chunkSize: pickStreamTusChunkSize(file.size),
+          retryDelays: [0, 3000, 7000, 12000],
+          removeFingerprintOnSuccess: true,
+          onProgress: (sent, total) => {
+            const ratio = Math.min(1, sent / Math.max(total, 1))
+            setHlsUploadOverlay({
+              pct: Math.min(90, 10 + Math.round(ratio * 80)),
+              title: "رفع الفيديو إلى Cloudflare Stream",
+              subtitle: `${Math.round(ratio * 100)}%`,
+            })
+          },
+          onSuccess: () => resolve(),
+          onError: (err) => reject(err instanceof Error ? err : new Error(String(err))),
+        })
+        upload.start()
+      })
+
+      setHlsUploadOverlay({
+        pct: 92,
+        title: "إنهاء الربط",
+        subtitle: "حفظ رابط HLS في قاعدة البيانات…",
+      })
+
+      const fin = await adminFinalizeStreamLesson({ lessonId, videoUid })
+      if (!fin.success) {
+        toast.error(fin.error)
+        return
+      }
+
+      setHlsUploadOverlay({
+        pct: 100,
+        title: "اكتمل",
+        subtitle: "Stream يعالج الفيديو؛ قد يستغرق ظهور الجودات قليلاً",
+      })
+      await new Promise((r) => setTimeout(r, 400))
+
+      toast.success("تم رفع الفيديو وربط قائمة Stream بالدرس")
+      if (fin.data) {
+        setEditingLesson(fin.data)
+        setFormHlsUrl(fin.data.hls_url ?? "")
+      }
+      try {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
+      } catch {
+        /* ignore */
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "فشل الرفع إلى Stream")
+    } finally {
+      setHlsUploadOverlay(null)
+    }
+  }
+
   const handleRawVideoPick = async (e: ChangeEvent<HTMLInputElement>) => {
     const list = e.target.files
     e.target.value = ""
     if (!list?.length) return
     const file = list[0]
-    await runRawVideoUploadAndTranscode(file)
+    let lessonId = editingLessonRef.current?.id
+    if (!lessonId) {
+      lessonId = (await waitForEditingLessonId()) ?? undefined
+    }
+    if (!lessonId) {
+      toast.error(
+        "تعذّر جاهزية معرّف الدرس بعد الانتظار. استخدم «إعادة المحاولة» في مربع الرفع أو أغلق النافذة وأعد فتحها."
+      )
+      return
+    }
+    if (enableCloudflareStreamUpload) {
+      await runStreamVideoUpload(file, lessonId)
+    } else {
+      await runRawVideoUploadAndTranscode(file, lessonId)
+    }
   }
 
   const handleRawVideoDrop = async (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     e.stopPropagation()
     setSourceVideoDragOver(false)
-    if (!editingLesson?.id || hlsBusy || saving || formPreview || !enableVideoTranscode) return
+    if (!editingLesson?.id || hlsBusy || saving || formPreview) return
+    if (!enableCloudflareStreamUpload && !rawR2TranscodeAvailable) return
     const f = e.dataTransfer.files?.[0]
     if (!f) {
       toast.error("أسقط ملف فيديو واحداً")
       return
     }
-    await runRawVideoUploadAndTranscode(f)
+    if (enableCloudflareStreamUpload) {
+      await runStreamVideoUpload(f)
+    } else {
+      await runRawVideoUploadAndTranscode(f)
+    }
   }
 
   const loadHlsVariantsFromR2 = async () => {
@@ -694,7 +942,8 @@ export function AdminLessonsClient({
   const saveDialog = async () => {
     const dm = parseInt(formDurationMin, 10)
     const durationSec = Number.isFinite(dm) ? dm * 60 : 0
-    const keepOpen = (enableR2LessonUpload || enableVideoTranscode) && !formPreview
+    const keepOpen =
+      (enableR2LessonUpload || rawR2TranscodeAvailable || enableCloudflareStreamUpload) && !formPreview
 
     setSaving(true)
     try {
@@ -945,7 +1194,8 @@ export function AdminLessonsClient({
                 onChange={(e) => setFormDesc(e.target.value)}
               />
             </div>
-            {(enableR2LessonUpload || enableVideoTranscode) && !formPreview ?
+            {(enableR2LessonUpload || rawR2TranscodeAvailable || enableCloudflareStreamUpload) &&
+            !formPreview ?
               <div className="space-y-3 rounded-lg border border-border bg-muted/15 p-3">
                 <p className="text-sm font-semibold text-foreground">رفع الفيديو هنا</p>
                 {enableR2LessonUpload && !r2PublicPlaybackReady ?
@@ -957,10 +1207,57 @@ export function AdminLessonsClient({
                     بلا ذلك قد ينجح الرفع إلى R2 لكن لن يُبنى رابط عام تلقائياً.
                   </p>
                 : null}
-                {mediaDraftCreating ?
-                  <p className="text-xs text-muted-foreground">جاري تجهيز الدرس للرفع…</p>
+                {mediaDraftError && !editingLesson ?
+                  <div
+                    dir="rtl"
+                    className="rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-2.5 space-y-2"
+                  >
+                    <p className="text-sm text-destructive font-medium leading-relaxed">{mediaDraftError}</p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      disabled={mediaDraftCreating}
+                      onClick={() => setMediaDraftRetryNonce((n) => n + 1)}
+                    >
+                      {mediaDraftCreating ?
+                        <>
+                          <Loader2 className="h-4 w-4 ml-2 animate-spin" />
+                          جاري المحاولة…
+                        </>
+                      : "إعادة المحاولة"}
+                    </Button>
+                  </div>
                 : null}
-                {enableR2LessonUpload && editingLesson ?
+                {mediaDraftCreating && !mediaDraftError ?
+                  <div className="space-y-3">
+                    {enableR2LessonUpload ?
+                      <div className="rounded-lg border border-dashed border-border p-3 space-y-3 bg-muted/30 min-h-[124px] flex flex-col items-center justify-center gap-2">
+                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                        <div className="h-3 w-3/4 max-w-[200px] rounded bg-muted animate-pulse" />
+                        <div className="h-2 w-full max-w-[260px] rounded bg-muted/80 animate-pulse" />
+                        <p className="text-xs text-muted-foreground">جاري تجهيز رفع مجلد HLS…</p>
+                      </div>
+                    : null}
+                    {enableCloudflareStreamUpload ?
+                      <div className="rounded-lg border border-dashed border-border p-3 space-y-3 bg-muted/30 min-h-[124px] flex flex-col items-center justify-center gap-2">
+                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                        <div className="h-3 w-2/3 max-w-[200px] rounded bg-muted animate-pulse" />
+                        <div className="h-2 w-full max-w-[260px] rounded bg-muted/80 animate-pulse" />
+                        <p className="text-xs text-muted-foreground">جاري تجهيز رفع Stream…</p>
+                      </div>
+                    : null}
+                    {rawR2TranscodeAvailable && !enableCloudflareStreamUpload ?
+                      <div className="rounded-lg border border-dashed border-border p-3 space-y-3 bg-muted/30 min-h-[124px] flex flex-col items-center justify-center gap-2">
+                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                        <div className="h-3 w-2/3 max-w-[180px] rounded bg-muted animate-pulse" />
+                        <div className="h-2 w-full max-w-[260px] rounded bg-muted/80 animate-pulse" />
+                        <p className="text-xs text-muted-foreground">جاري تجهيز رفع الفيديو الخام…</p>
+                      </div>
+                    : null}
+                  </div>
+                : null}
+                {enableR2LessonUpload && editingLesson && !mediaDraftCreating ?
                   <div
                     role="button"
                     tabIndex={0}
@@ -1007,13 +1304,17 @@ export function AdminLessonsClient({
                     </Button>
                   </div>
                 : null}
-                {enableVideoTranscode && editingLesson ?
+                {(enableCloudflareStreamUpload || rawR2TranscodeAvailable) &&
+                editingLesson &&
+                !mediaDraftCreating ?
                   <div
                     role="button"
                     tabIndex={0}
-                    onKeyDown={(ke) =>
-                      ke.key === "Enter" && !hlsBusy && rawVideoInputRef.current?.click()
-                    }
+                    onKeyDown={(ke) => {
+                      if (ke.key !== "Enter" || hlsBusy) return
+                      if (!enableCloudflareStreamUpload && !rawR2TranscodeAvailable) return
+                      rawVideoInputRef.current?.click()
+                    }}
                     onDragEnter={(ev) => {
                       ev.preventDefault()
                       setSourceVideoDragOver(true)
@@ -1036,10 +1337,41 @@ export function AdminLessonsClient({
                       className="hidden"
                       onChange={(ev) => void handleRawVideoPick(ev)}
                     />
-                    <p className="text-sm font-medium text-foreground">فيديو خام (سحب أو اختيار)</p>
+                    <p className="text-sm font-medium text-foreground">
+                      فيديو خام{" "}
+                      {enableCloudflareStreamUpload ?
+                        "(Cloudflare Stream)"
+                      : enableTranscoderWorkerQueue ?
+                        "(عامل خارجي)"
+                      : enableServerVideoTranscode ?
+                        "(ffmpeg محلّياً)"
+                      : ""}{" "}
+                      (سحب أو اختيار)
+                    </p>
                     <p className="text-xs text-muted-foreground leading-relaxed">
-                      يُحوَّل على الخادم إلى HLS: <strong>1080p و720p و480p</strong>. المدة تُحدَّد تلقائياً.
-                      التحويل يحتاج ffmpeg على السيرفر؛ خطط مثل Vercel قد توقف الفيديو الطويل قبل انتهاء التحويل.
+                      {enableCloudflareStreamUpload ?
+                        <>
+                          الرفع إلى Cloudflare Stream عبر البروتوكول TUS (قابل للاستئناف)، والتحويل إلى HLS
+                          بجودات متعددة (مثل <strong>1080p و720p و480p</strong>) يتم على شبكة Stream. التشغيل
+                          للطلاب يعتمد روابطًا موقّعة.
+                        </>
+                      : enableTranscoderWorkerQueue ?
+                        <>
+                          يُرفع الناتج إلى مسار المصدر تحت{" "}
+                          <code className="rounded bg-muted px-1" dir="ltr">
+                            _source/
+                          </code>{" "}
+                          ثم يُستَدعَى عامل تحويل يشغّل ffmpeg، يكتب HLS بدقّات متعددة (على سبيل المثال{" "}
+                          <strong>1080p و720p و480p</strong>) تحت مجلّد الدرس ويحدِّث التطبيق تلقائياً ثم يُنشَر
+                          الدرس.
+                        </>
+                      : enableServerVideoTranscode ?
+                        <>
+                          يُحوَّل على الخادم إلى HLS:{" "}
+                          <strong>1080p و720p و480p</strong>. المدة تُحدَّد تلقائياً. التحويل يحتاج ffmpeg على
+                          السيرفر؛ خطط مثل Vercel قد توقف الفيديو الطويل قبل انتهاء التحويل.
+                        </>
+                      : null}
                     </p>
                     <Button
                       type="button"
@@ -1068,7 +1400,11 @@ export function AdminLessonsClient({
                 يمكنك لصق رابط يدوي، أو تركه فارغاً والاعتماد على الرفع من المربع أعلاه.
               </p>
             </div>
-            {enableR2ServerMedia && editingLesson && !formPreview && formHlsUrl.trim() ?
+            {enableR2ServerMedia &&
+            editingLesson &&
+            !formPreview &&
+            formHlsUrl.trim() &&
+            !looksLikeCloudflareStreamHlsMaster(formHlsUrl) ?
               <div className="rounded-lg border border-border p-3 space-y-3 bg-muted/20">
                 <p className="text-sm font-medium text-foreground">تعديل الجودات على R2</p>
                 <p className="text-xs text-muted-foreground leading-relaxed">
