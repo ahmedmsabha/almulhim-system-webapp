@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
+import { useRouter } from "next/navigation"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -58,7 +59,7 @@ import {
   adminPresignLessonSourceVideoUpload,
   adminTranscodeLessonUploadedVideo,
 } from "@/actions/admin-media-video-source"
-import { AdminLessonVideoWizard } from "@/components/admin/admin-lesson-video-wizard"
+import { LessonVideoUploader } from "@/components/admin/lesson-video-uploader"
 import { Checkbox } from "@/components/ui/checkbox"
 import { collectFilesWithRelativePathsFromDrop } from "@/lib/client/collect-files-from-data-transfer"
 import { xhrPutBlob } from "@/lib/client/admin-upload-xhr"
@@ -159,6 +160,7 @@ export function AdminLessonsClient({
   r2BucketDisplayName?: string | null
 }) {
   const queryClient = useQueryClient()
+  const router = useRouter()
   const rawR2TranscodeAvailable =
     enableServerVideoTranscode || enableTranscoderWorkerQueue
   const workerOnlyVideoUi = enableTranscoderWorkerQueue
@@ -1304,16 +1306,10 @@ export function AdminLessonsClient({
                   </div>
                 : null}
                 {editingLesson && !mediaDraftCreating ?
-                  <AdminLessonVideoWizard
+                  <LessonVideoUploader
                     lessonId={editingLesson.id}
-                    hlsUrl={formHlsUrl.trim() ? formHlsUrl : editingLesson.hls_url}
-                    disabled={saving}
-                    onVideoLinked={(lesson) => {
-                      setEditingLesson(lesson)
-                      setFormHlsUrl(lesson.hls_url ?? "")
-                      toast.success("✓ تم ربط الفيديو بنجاح")
-                      void queryClient.invalidateQueries({ queryKey: queryKeys.adminLessons() })
-                    }}
+                    currentHlsUrl={editingLesson.hls_url ?? null}
+                    onSuccess={() => router.refresh()}
                   />
                 : null}
               </div>
