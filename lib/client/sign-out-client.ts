@@ -22,5 +22,9 @@ export async function clearUserScopedRuntimeCaches(): Promise<void> {
 /** يمسح كاش PWA ثم يسجّل الخروج حتى لا تبقى بيانات طالب على الجهاز المشترك */
 export async function signOutAndClearAppCaches(): Promise<void> {
   await clearUserScopedRuntimeCaches()
-  await signOutAction()
+  try {
+    await signOutAction()
+  } finally {
+    window.location.assign('/public/login')
+  }
 }

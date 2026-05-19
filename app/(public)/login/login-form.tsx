@@ -145,7 +145,7 @@ export function LoginForm() {
                 : 'cursor-pointer text-sm font-normal leading-none'
               }
             >
-              ابقني مسجلاً
+              تذكّرني لمدة سنة
             </Label>
           </div>
 

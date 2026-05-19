@@ -1,23 +1,19 @@
 "use client"
 
 import { useCallback, useEffect, useId, useRef, useState } from "react"
+import { useRouter } from "next/navigation"
 
 import { adminPresignLessonSourceVideoUpload } from "@/actions/admin-media-video-source"
 import { adminQueueTranscodeJob } from "@/actions/admin-media-transcode-queue"
-import { adminBindLessonHlsFromStandardR2Path } from "@/actions/admin-media-hls"
+import { xhrPutBlob } from "@/lib/client/admin-upload-xhr"
 
 const MAX_BYTES = 4 * 1024 * 1024 * 1024
 
-type UploaderState =
-  | { status: "idle" }
-  | { status: "uploading"; progress: number; fileName: string }
-  | { status: "transcoding"; sourceR2Key: string }
-  | { status: "binding" }
-
-export interface LessonVideoUploaderProps {
-  lessonId: string
-  currentHlsUrl: string | null
-  onSuccess: () => void
+function workerMisconfiguredMessage(): string {
+  return (
+    "عامل التحويل غير مُهيأ على الخادم. مطلوب: TRANSCODER_WORKER_URL و TRANSCODER_WEBHOOK_SECRET و " +
+    "NEXT_PUBLIC_SITE_URL (أو VERCEL_URL في Vercel)."
+  )
 }
 
 function truncateMiddle(url: string, max = 56): string {
@@ -28,369 +24,326 @@ function truncateMiddle(url: string, max = 56): string {
   return `${u.slice(0, head)}…${u.slice(-tail)}`
 }
 
-function putLessonSourceWithXHR(
-  signedUrl: string,
-  contentType: string,
-  file: File,
-  setProgress: (pct: number) => void,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest()
+type FlowStep = "pick" | "upload" | "queue" | "pending"
 
-    xhr.upload.addEventListener("progress", (e) => {
-      if (!e.lengthComputable) return
-      const total = Math.max(e.total, 1)
-      setProgress((e.loaded / total) * 100)
-    })
-
-    xhr.addEventListener("load", () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve()
-      else reject(new Error("upload_failed"))
-    })
-    xhr.addEventListener("error", () => reject(new Error("upload_failed")))
-    xhr.addEventListener("abort", () => reject(new Error("upload_failed")))
-
-    xhr.open("PUT", signedUrl)
-    xhr.setRequestHeader("Content-Type", contentType)
-    xhr.send(file)
-  })
+export interface LessonVideoUploaderProps {
+  lessonId: string
+  currentHlsUrl: string | null
+  onSuccess?: () => void
+  /** يُستدعى بعد اكتمال PUT إلى R2 بنجاح (قبل طابور التحويل). */
+  onUploadComplete?: (payload: { sourceR2Key: string; relativePath: string }) => void
+  disabled?: boolean
+  transcoderWorkerQueueConfigured?: boolean
 }
 
-export function LessonVideoUploader({ lessonId, currentHlsUrl, onSuccess }: LessonVideoUploaderProps) {
+export function LessonVideoUploader({
+  lessonId,
+  currentHlsUrl,
+  onSuccess,
+  onUploadComplete,
+  disabled = false,
+  transcoderWorkerQueueConfigured = true,
+}: LessonVideoUploaderProps) {
+  const router = useRouter()
   const inputId = useId()
-  const [state, setState] = useState<UploaderState>({ status: "idle" })
-  /** When HLS exists, clicking «رفع فيديو جديد» shows picker again instead of summary. */
   const [allowNewUpload, setAllowNewUpload] = useState(false)
-  /** idle step errors */
-  const [idleError, setIdleError] = useState<string | null>(null)
+  const [step, setStep] = useState<FlowStep>("pick")
+  const [busy, setBusy] = useState(false)
+  const [uploadPct, setUploadPct] = useState(0)
+  const [fileName, setFileName] = useState<string | null>(null)
+  const [sourceR2Key, setSourceR2Key] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [queueError, setQueueError] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
 
-  /** transcoding: queue outcome (after adminQueueTranscodeJob settles) */
-  const [queueDone, setQueueDone] = useState(false)
-  const [queueOk, setQueueOk] = useState<boolean | null>(null)
-  const [queueError, setQueueError] = useState<string | null>(null)
+  const awaitingWebhookRef = useRef(false)
+  const onSuccessFiredRef = useRef(false)
 
-  /** binding sub-state */
-  const [bindBusy, setBindBusy] = useState(false)
-  const [bindSuccess, setBindSuccess] = useState(false)
-  const [bindError, setBindError] = useState<string | null>(null)
-
-  const onSuccessCalled = useRef(false)
-  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pipelineBlocked = disabled || !transcoderWorkerQueueConfigured
+  const hasLinkedVideo = Boolean(currentHlsUrl?.trim())
+  const inFlow = allowNewUpload || !hasLinkedVideo
 
   useEffect(() => {
-    setState({ status: "idle" })
     setAllowNewUpload(false)
-    setIdleError(null)
-    setDragOver(false)
-    setQueueDone(false)
-    setQueueOk(null)
+    setStep("pick")
+    setBusy(false)
+    setUploadPct(0)
+    setFileName(null)
+    setSourceR2Key(null)
+    setError(null)
     setQueueError(null)
-    setBindBusy(false)
-    setBindSuccess(false)
-    setBindError(null)
-    onSuccessCalled.current = false
-    if (successTimerRef.current) {
-      clearTimeout(successTimerRef.current)
-      successTimerRef.current = null
-    }
+    awaitingWebhookRef.current = false
+    onSuccessFiredRef.current = false
   }, [lessonId])
 
-  const transcodingKey = state.status === "transcoding" ? state.sourceR2Key : null
-
-  /** On transcoding enter: enqueue job (then update Arabic messages). */
   useEffect(() => {
-    if (!transcodingKey) return
-
-    let cancelled = false
-
-    setQueueDone(false)
-    setQueueOk(null)
+    if (!currentHlsUrl?.trim() || !awaitingWebhookRef.current || onSuccessFiredRef.current) return
+    onSuccessFiredRef.current = true
+    awaitingWebhookRef.current = false
+    onSuccess?.()
+    setAllowNewUpload(false)
+    setStep("pick")
+    setSourceR2Key(null)
     setQueueError(null)
+    setError(null)
+  }, [currentHlsUrl, onSuccess])
 
-    void (async () => {
-      try {
-        const qr = await adminQueueTranscodeJob({ lessonId, sourceR2Key: transcodingKey })
-        if (cancelled) return
-        if (qr.success) {
-          setQueueOk(true)
-          setQueueError(null)
-        } else {
-          setQueueOk(false)
-          setQueueError(qr.error)
-        }
-      } catch {
-        if (cancelled) return
-        setQueueOk(false)
-        setQueueError("تعذّر إرسال طلب التحويل.")
-      } finally {
-        if (!cancelled) setQueueDone(true)
-      }
-    })()
-
-    return () => {
-      cancelled = true
-    }
-  }, [lessonId, transcodingKey])
-
-  useEffect(() => {
-    return () => {
-      if (successTimerRef.current) clearTimeout(successTimerRef.current)
-    }
-  }, [])
-
-  const runBind = useCallback(async () => {
-    setBindBusy(true)
-    setBindError(null)
-    setBindSuccess(false)
-    try {
-      const res = await adminBindLessonHlsFromStandardR2Path(lessonId)
-      if (!res.success) {
-        setBindError(res.error)
-        setBindBusy(false)
-        return
-      }
-      setBindSuccess(true)
-      setBindBusy(false)
-      setAllowNewUpload(false)
-      if (!onSuccessCalled.current) {
-        onSuccessCalled.current = true
-        successTimerRef.current = setTimeout(() => {
-          successTimerRef.current = null
-          onSuccess()
-        }, 1000)
-      }
-    } catch {
-      setBindError("تعذّر ربط الفيديو. أعد المحاولة بعد التأكد من اكتمال التحويل.")
-      setBindBusy(false)
-    }
-  }, [lessonId, onSuccess])
-
-  const processSelectedFile = useCallback(
+  const processFile = useCallback(
     async (file: File) => {
-      setIdleError(null)
+      if (pipelineBlocked || busy) return
 
-      if (file.size > MAX_BYTES) {
-        setIdleError("حجم الملف يتجاوز الحد الأقصى البالغ 4 غيغابايت.")
+      const looksVideo =
+        (file.type && file.type.startsWith("video/")) ||
+        /\.(mp4|mov|webm|mkv|avi|m4v|mpeg|mpg)$/i.test(file.name)
+      if (!looksVideo) {
+        setError("يُقبل ملف فيديو فقط.")
         return
       }
+      if (!file.size || file.size > MAX_BYTES) {
+        setError("حجم الملف غير مناسب (الحد الأقصى 4 غيغابايت).")
+        return
+      }
+
+      setBusy(true)
+      setError(null)
+      setQueueError(null)
+      setStep("upload")
+      setUploadPct(0)
+      setFileName(file.name)
 
       try {
         const presign = await adminPresignLessonSourceVideoUpload(
           lessonId,
           file.name,
-          file.type || "video/mp4",
+          file.type || "application/octet-stream",
           file.size,
         )
-
         if (!presign.success) {
-          setIdleError(presign.error)
+          setError(presign.error)
+          setStep("pick")
           return
         }
 
-        const { signedUrl, relativePath, contentType } = presign.data
-
-        setState({ status: "uploading", progress: 0, fileName: file.name })
+        const { signedUrl, relativePath: relPath, contentType } = presign.data
 
         try {
-          await putLessonSourceWithXHR(signedUrl, contentType, file, (p) => {
-            setState({ status: "uploading", progress: p, fileName: file.name })
+          await xhrPutBlob(signedUrl, file, contentType, (loaded, total) => {
+            setUploadPct(Math.min(100, Math.round((loaded / Math.max(total, 1)) * 100)))
           })
         } catch {
-          setState({ status: "idle" })
-          setIdleError("فشل رفع الملف. تحقق من الاتصال أو امتيازات CORS ثم حاول مجدداً.")
+          setError("تعذّر رفع الملف. تحقق من الاتصال أو جرّب ملفاً أصغر، ثم أعد المحاولة.")
+          setStep("pick")
           return
         }
 
-        const sourceR2Key = `hls/${lessonId}/${relativePath}`
-        setState({ status: "transcoding", sourceR2Key })
+        setUploadPct(100)
+        const key = `hls/${lessonId}/${relPath}`
+        setSourceR2Key(key)
+        setStep("queue")
+        onUploadComplete?.({ sourceR2Key: key, relativePath: relPath })
       } catch {
-        setIdleError("حدث خطأ غير متوقع أثناء تجهيز الرفع.")
+        setError("حدث خطأ غير متوقع أثناء تجهيز الرفع.")
+        setStep("pick")
+      } finally {
+        setBusy(false)
       }
     },
-    [lessonId],
+    [busy, lessonId, onUploadComplete, pipelineBlocked],
   )
 
-  function onInputChange(files: FileList | null) {
-    const file = files?.[0]
-    if (file) void processSelectedFile(file)
+  const startTranscode = useCallback(async () => {
+    if (pipelineBlocked || busy || !sourceR2Key) return
+    setBusy(true)
+    setQueueError(null)
+    try {
+      const qr = await adminQueueTranscodeJob({ lessonId, sourceR2Key })
+      if (!qr.success) {
+        setQueueError("تعذّر إرسال طلب التحويل. انتظر قليلاً ثم أعد المحاولة.")
+        return
+      }
+      awaitingWebhookRef.current = true
+      onSuccessFiredRef.current = false
+      setStep("pending")
+    } catch {
+      setQueueError("تعذّر إرسال طلب التحويل. انتظر قليلاً ثم أعد المحاولة.")
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, lessonId, pipelineBlocked, sourceR2Key])
+
+  if (hasLinkedVideo && !allowNewUpload) {
+    return (
+      <div dir="rtl" className="rounded-lg border border-border bg-muted/15 p-4 space-y-4">
+        <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-emerald-700 dark:text-emerald-400">
+          <span aria-hidden>✓</span>
+          <span>الفيديو جاهز (HLS على R2)</span>
+        </div>
+        <div>
+          <a
+            href={currentHlsUrl!}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs font-mono text-primary underline underline-offset-2 hover:opacity-90 break-all inline-block max-w-full"
+            dir="ltr"
+          >
+            {truncateMiddle(currentHlsUrl!)}
+          </a>
+        </div>
+        <button
+          type="button"
+          className="inline-flex rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent/60 transition-colors disabled:opacity-50"
+          disabled={pipelineBlocked}
+          onClick={() => {
+            setAllowNewUpload(true)
+            setStep("pick")
+            setError(null)
+            setQueueError(null)
+            setSourceR2Key(null)
+            awaitingWebhookRef.current = false
+            onSuccessFiredRef.current = false
+          }}
+        >
+          رفع فيديو جديد
+        </button>
+      </div>
+    )
   }
 
   return (
     <div dir="rtl" className="rounded-lg border border-border bg-muted/15 p-4 space-y-4">
-      {state.status === "idle" ?
-        <>
-          {currentHlsUrl && !allowNewUpload ?
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-emerald-700 dark:text-emerald-400">
-                <span aria-hidden>✓</span>
-                <span>الفيديو مرفوع ومنشور</span>
-              </div>
-              <div>
-                <a
-                  href={currentHlsUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs font-mono text-primary underline underline-offset-2 hover:opacity-90 break-all inline-block max-w-full"
-                  dir="ltr"
-                >
-                  {truncateMiddle(currentHlsUrl)}
-                </a>
-              </div>
-              <button
-                type="button"
-                className="inline-flex rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent/60 transition-colors"
-                onClick={() => {
-                  setAllowNewUpload(true)
-                  setState({ status: "idle" })
-                  setIdleError(null)
-                  setDragOver(false)
-                  setQueueDone(false)
-                  setQueueOk(null)
-                  setQueueError(null)
-                  setBindBusy(false)
-                  setBindSuccess(false)
-                  setBindError(null)
-                  onSuccessCalled.current = false
-                  if (successTimerRef.current) {
-                    clearTimeout(successTimerRef.current)
-                    successTimerRef.current = null
-                  }
-                }}
-              >
-                رفع فيديو جديد
-              </button>
-            </div>
-          : <>
-              {idleError ?
-                <p className="text-sm text-red-600 dark:text-red-400 leading-relaxed">{idleError}</p>
-              : null}
-
-              <label
-                htmlFor={inputId}
-                tabIndex={0}
-                role="presentation"
-                onDragEnter={(e) => {
-                  e.preventDefault()
-                  setDragOver(true)
-                }}
-                onDragLeave={() => setDragOver(false)}
-                onDragOver={(e) => {
-                  e.preventDefault()
-                  setDragOver(true)
-                }}
-                onDrop={(e) => {
-                  e.preventDefault()
-                  setDragOver(false)
-                  const f = e.dataTransfer.files?.[0]
-                  if (f) void processSelectedFile(f)
-                }}
-                onKeyDown={(ke) => {
-                  if (ke.key === "Enter" || ke.key === " ") {
-                    ke.preventDefault()
-                    document.getElementById(inputId)?.click()
-                  }
-                }}
-                className={[
-                  "flex min-h-[160px] cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6 text-center transition-colors",
-                  dragOver ? "border-primary bg-primary/5" : "border-border bg-muted/30",
-                ].join(" ")}
-              >
-                <input
-                  id={inputId}
-                  type="file"
-                  accept="video/mp4,video/quicktime"
-                  className="sr-only"
-                  onChange={(e) => {
-                    onInputChange(e.target.files)
-                    e.target.value = ""
-                  }}
-                />
-                <span className="text-sm font-medium text-foreground">
-                  اسحب فيديو MP4 هنا أو اضغط للاختيار
-                </span>
-                <span className="text-xs text-muted-foreground">الحد الأقصى: 4GB</span>
-              </label>
-            </>
-          }
-        </>
-      : null}
-
-      {state.status === "uploading" ?
-        <div className="space-y-2">
-          <p className="text-sm font-medium text-foreground text-right">{state.fileName}</p>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-            <div
-              className="h-full rounded-full bg-primary transition-[width] duration-150"
-              style={{ width: `${Math.min(100, Math.max(0, state.progress))}%` }}
-            />
-          </div>
-          <p className="text-xs text-muted-foreground text-right">
-            جارٍ الرفع... {Math.round(state.progress)}%
-          </p>
+      {!transcoderWorkerQueueConfigured ?
+        <div
+          role="alert"
+          className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2.5 text-sm text-destructive leading-relaxed"
+        >
+          {workerMisconfiguredMessage()}
         </div>
       : null}
 
-      {state.status === "transcoding" ?
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <span
-              className="inline-block h-9 w-9 shrink-0 rounded-full border-2 border-muted border-t-primary animate-spin"
-              aria-hidden
+      {error ?
+        <p className="text-sm text-red-600 dark:text-red-400 leading-relaxed">{error}</p>
+      : null}
+
+      {step === "pick" && inFlow ?
+        <div className="space-y-2">
+          <p className="text-sm font-medium text-foreground">1 — اختر ملف الفيديو</p>
+          <label
+            htmlFor={inputId}
+            tabIndex={0}
+            role="presentation"
+            onDragEnter={(e) => {
+              e.preventDefault()
+              setDragOver(true)
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDragOver={(e) => {
+              e.preventDefault()
+              setDragOver(true)
+            }}
+            onDrop={(e) => {
+              e.preventDefault()
+              setDragOver(false)
+              const f = e.dataTransfer.files?.[0]
+              if (f) void processFile(f)
+            }}
+            onKeyDown={(ke) => {
+              if (ke.key === "Enter" || ke.key === " ") {
+                ke.preventDefault()
+                document.getElementById(inputId)?.click()
+              }
+            }}
+            className={[
+              "flex min-h-[140px] cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6 text-center transition-colors",
+              dragOver ? "border-primary bg-primary/5" : "border-border bg-muted/30",
+              pipelineBlocked || busy ? "pointer-events-none opacity-60" : "",
+            ].join(" ")}
+          >
+            <input
+              id={inputId}
+              type="file"
+              accept="video/*"
+              className="sr-only"
+              disabled={pipelineBlocked || busy}
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                e.target.value = ""
+                if (file) void processFile(file)
+              }}
+            />
+            <span className="text-sm font-medium text-foreground">اسحب فيديو هنا أو اضغط للاختيار</span>
+            <span className="text-xs text-muted-foreground">الحد الأقصى: 4 غيغابايت — video/*</span>
+          </label>
+        </div>
+      : null}
+
+      {step === "upload" ?
+        <div className="space-y-2">
+          <p className="text-sm font-medium text-foreground">2 — رفع المصدر إلى R2</p>
+          {fileName ?
+            <p className="text-sm text-foreground/90 text-right">{fileName}</p>
+          : null}
+          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full bg-primary transition-[width] duration-150"
+              style={{ width: `${Math.min(100, Math.max(0, uploadPct))}%` }}
             />
           </div>
-          <p className="text-sm font-medium text-emerald-700 dark:text-emerald-400">تم رفع الفيديو ✓</p>
-          {!queueDone ?
-            <p className="text-sm text-foreground">جارٍ إرسال طلب التحويل...</p>
-          : queueOk ?
-            <p className="text-sm text-emerald-700 dark:text-emerald-400">
-              ✓ طلب التحويل قُبل — سيستغرق التحويل بضع دقائق
-            </p>
-          : <p className="text-sm text-red-600 dark:text-red-400">{queueError ?? "فشل إرسال طلب التحويل."}</p>}
+          <p className="text-xs text-muted-foreground text-right">جارٍ الرفع… {uploadPct}%</p>
+        </div>
+      : null}
 
+      {step === "queue" ?
+        <div className="space-y-3">
+          <p className="text-sm font-medium text-foreground">3 — طابور التحويل</p>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            المصدر على R2:{" "}
+            <code className="rounded bg-muted px-1 font-mono text-[11px]" dir="ltr">
+              {sourceR2Key}
+            </code>
+          </p>
+          {queueError ?
+            <p className="text-sm text-red-600 dark:text-red-400">{queueError}</p>
+          : null}
           <button
             type="button"
             className="inline-flex w-full sm:w-auto justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-95 transition-opacity disabled:opacity-50"
-            disabled={!queueDone}
-            onClick={() => {
-              setState({ status: "binding" })
-              void runBind()
-            }}
+            disabled={pipelineBlocked || busy || !sourceR2Key}
+            onClick={() => void startTranscode()}
           >
-            ربط الفيديو بالدرس بعد اكتمال التحويل ←
+            {busy ? "جارٍ الإرسال…" : "بدء التحويل"}
           </button>
         </div>
       : null}
 
-      {state.status === "binding" ?
+      {step === "pending" ?
         <div className="space-y-3">
-          {bindBusy && !bindSuccess && !bindError ?
-            <div className="flex items-center gap-2 text-sm text-foreground">
-              <span
-                className="inline-block h-5 w-5 shrink-0 rounded-full border-2 border-muted border-t-primary animate-spin"
-                aria-hidden
-              />
-              <span>جارٍ ربط الفيديو...</span>
-            </div>
+          <p className="text-sm font-medium text-foreground">4 — يتم التحويل على Railway</p>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            جارٍ التحويل… سيُحدَّث الدرس تلقائياً عند الانتهاء. يمكنك تحديث الصفحة لمتابعة الحالة.
+          </p>
+          {queueError ?
+            <p className="text-sm text-red-600 dark:text-red-400">{queueError}</p>
           : null}
-
-          {bindSuccess ?
-            <p className="text-sm font-medium text-emerald-700 dark:text-emerald-400">✓ تم ربط الفيديو بنجاح</p>
-          : null}
-
-          {bindError ?
-            <>
-              <p className="text-sm text-red-600 dark:text-red-400 leading-relaxed">{bindError}</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="inline-flex rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent/60 disabled:opacity-50"
+              disabled={busy}
+              onClick={() => router.refresh()}
+            >
+              تحديث الصفحة
+            </button>
+            {sourceR2Key ?
               <button
                 type="button"
-                className="inline-flex rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent/60"
-                disabled={bindBusy}
-                onClick={() => void runBind()}
+                className="inline-flex rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent/60 disabled:opacity-50"
+                disabled={pipelineBlocked || busy}
+                onClick={() => void startTranscode()}
               >
-                إعادة المحاولة
+                إعادة إرسال طابور التحويل
               </button>
-            </>
-          : null}
+            : null}
+          </div>
         </div>
       : null}
     </div>

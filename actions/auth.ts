@@ -1,8 +1,6 @@
 "use server"
 
 import { eq } from "drizzle-orm"
-import { redirect } from "next/navigation"
-
 import { withUserDb } from "@/lib/db/client"
 import { profiles } from "@/lib/db/schema"
 import { createClient } from "@/lib/supabase/server"
@@ -25,15 +23,21 @@ async function resolveSessionRoleGate(
   try {
     const supabase = await createClient()
     const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser()
+    if (userError || !user) {
+      return actionFailure("غير مصرح", "UNAUTHORIZED")
+    }
+    const {
       data: { session },
-      error,
     } = await supabase.auth.getSession()
-    if (error || !session?.access_token || !session.user) {
-      return actionFailure("يجب تسجيل الدخول", "UNAUTHORIZED")
+    if (!session?.access_token) {
+      return actionFailure("غير مصرح", "UNAUTHORIZED")
     }
 
     const rows = await withUserDb(session.access_token, async (tx) =>
-      tx.select().from(profiles).where(eq(profiles.id, session.user.id)).limit(1)
+      tx.select().from(profiles).where(eq(profiles.id, user.id)).limit(1)
     )
     const row = rows[0]
     if (!row) {
@@ -72,15 +76,21 @@ export async function requireStudentOrAdminSession(): Promise<
   try {
     const supabase = await createClient()
     const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser()
+    if (userError || !user) {
+      return actionFailure("غير مصرح", "UNAUTHORIZED")
+    }
+    const {
       data: { session },
-      error,
     } = await supabase.auth.getSession()
-    if (error || !session?.access_token || !session.user) {
-      return actionFailure("يجب تسجيل الدخول", "UNAUTHORIZED")
+    if (!session?.access_token) {
+      return actionFailure("غير مصرح", "UNAUTHORIZED")
     }
 
     const rows = await withUserDb(session.access_token, async (tx) =>
-      tx.select().from(profiles).where(eq(profiles.id, session.user.id)).limit(1)
+      tx.select().from(profiles).where(eq(profiles.id, user.id)).limit(1)
     )
     const row = rows[0]
     if (!row) {
@@ -131,17 +141,28 @@ export async function requireAdmin(): Promise<ActionResult<Profile>> {
 }
 
 export async function getSessionAccessToken(): Promise<string | null> {
-  const supabase = await createClient()
-  const {
-    data: { session },
-  } = await supabase.auth.getSession()
-  return session?.access_token ?? null
+  try {
+    const supabase = await createClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (!user) return null
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    return session?.access_token ?? null
+  } catch {
+    return null
+  }
 }
 
 export async function signOutAction(): Promise<void> {
-  const supabase = await createClient()
-  await supabase.auth.signOut()
-  redirect("/login")
+  try {
+    const supabase = await createClient()
+    await supabase.auth.signOut({ scope: "local" })
+  } catch {
+    /* Cookie/session clear best-effort; client forces /public/login reload */
+  }
 }
 
 /** بعد تسجيل الدخول من العميل — يضمن صف profiles ويعيد مسار التوجيه. */
@@ -149,17 +170,23 @@ export async function resolvePostLoginDestination(): Promise<ActionResult<string
   try {
     const supabase = await createClient()
     const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser()
+    if (userError || !user) {
+      return actionFailure("غير مصرح", "UNAUTHORIZED")
+    }
+    const {
       data: { session },
-      error,
     } = await supabase.auth.getSession()
-    if (error || !session?.user || !session.access_token) {
-      return actionFailure("يجب تسجيل الدخول", "UNAUTHORIZED")
+    if (!session?.access_token) {
+      return actionFailure("غير مصرح", "UNAUTHORIZED")
     }
 
-    await ensureProfileRow(session.user)
+    await ensureProfileRow(user)
 
     const rows = await withUserDb(session.access_token, async (tx) =>
-      tx.select().from(profiles).where(eq(profiles.id, session.user.id)).limit(1)
+      tx.select().from(profiles).where(eq(profiles.id, user.id)).limit(1)
     )
     const row = rows[0]
     if (!row) {
