@@ -1,91 +1,90 @@
-"use client"
-
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import Link from "next/link"
+import { formatDistanceToNow } from "date-fns"
+import { arSA } from "date-fns/locale"
 import {
   Users,
   Video,
   FileText,
   TrendingUp,
   Eye,
-  Download,
   Plus,
-  ArrowUpLeft,
   Clock,
   CheckCircle,
 } from "lucide-react"
-import { demoStudents, sampleLessons, samplePDFs } from "@/lib/sample-data"
+import Link from "next/link"
 
-export default function AdminDashboard() {
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { loadAdminDashboardData } from "@/lib/server/admin-dashboard-data"
+import { requireAdminLayoutContext } from "@/lib/server/layout-gates"
+
+export default async function AdminDashboardPage() {
+  const { profile } = await requireAdminLayoutContext()
+  const {
+    studentCount,
+    lessonCount,
+    pdfCount,
+    watchEngagementCount,
+    recentWatch,
+    unreadConversationsCount,
+    recentStudents,
+  } = await loadAdminDashboardData()
+
   const stats = [
     {
       title: "إجمالي الطلاب",
-      value: demoStudents.length.toString(),
-      change: "+12%",
+      value: studentCount.toString(),
+      change: "—",
       icon: Users,
       color: "text-primary",
       bgColor: "bg-primary/10",
     },
     {
       title: "الدروس المنشورة",
-      value: sampleLessons.length.toString(),
-      change: "+5",
+      value: lessonCount.toString(),
+      change: "—",
       icon: Video,
       color: "text-secondary",
       bgColor: "bg-secondary/10",
     },
     {
       title: "الملفات المرفوعة",
-      value: samplePDFs.length.toString(),
-      change: "+8",
+      value: pdfCount.toString(),
+      change: "—",
       icon: FileText,
       color: "text-accent",
       bgColor: "bg-accent/10",
     },
     {
-      title: "معدل المشاهدات",
-      value: "1,234",
-      change: "+23%",
+      title: "جلسات مشاهدة نشطة",
+      value: watchEngagementCount.toString(),
+      change: "—",
       icon: TrendingUp,
       color: "text-chart-4",
       bgColor: "bg-chart-4/10",
     },
   ]
 
-  const recentActivities = [
-    { type: "view", text: "أحمد محمد شاهد درس الحركة الخطية", time: "منذ 5 دقائق" },
-    { type: "download", text: "سارة علي حملت ملخص الفصل الأول", time: "منذ 15 دقيقة" },
-    { type: "subscribe", text: "طالب جديد اشترك في الباقة الشهرية", time: "منذ ساعة" },
-    { type: "view", text: "فاطمة أحمد شاهدت درس قوانين نيوتن", time: "منذ ساعتين" },
-    { type: "download", text: "خالد عمر حمل حلول التمارين", time: "منذ 3 ساعات" },
-  ]
-
-  const pendingTasks = [
-    { text: "مراجعة 5 رسائل جديدة من الطلاب", urgent: true },
-    { text: "رفع درس جديد عن الطاقة الحركية", urgent: false },
-    { text: "تحديث ملخص الفصل الثاني", urgent: false },
-    { text: "الرد على استفسارات الطلاب", urgent: true },
-  ]
-
   return (
     <div className="space-y-6">
       {/* Welcome Section */}
       <div className="bg-gradient-to-l from-primary to-primary/80 rounded-2xl p-6 text-primary-foreground">
-        <h1 className="text-2xl font-bold mb-2">مرحباً أستاذ محمد</h1>
+        <h1 className="text-2xl font-bold mb-2">مرحباً أستاذ {profile.full_name}</h1>
         <p className="text-primary-foreground/80">
-          لديك 5 رسائل جديدة و 3 طلاب في انتظار الموافقة
+          {unreadConversationsCount > 0 ?
+            `لديك ${unreadConversationsCount} محادثة بها رسائل غير مقروءة من الطلاب`
+          : "لا توجد محادثات بانتظار المراجعة"}
         </p>
         <div className="flex gap-3 mt-4">
           <Button asChild variant="secondary" size="sm">
-            <Link href="/admin/messages">
-              عرض الرسائل
-            </Link>
+            <Link href="/admin/messages">عرض الرسائل</Link>
           </Button>
-          <Button asChild variant="outline" size="sm" className="bg-transparent border-primary-foreground/30 text-primary-foreground hover:bg-primary-foreground/10">
-            <Link href="/admin/students">
-              إدارة الطلاب
-            </Link>
+          <Button
+            asChild
+            variant="outline"
+            size="sm"
+            className="bg-transparent border-primary-foreground/30 text-primary-foreground hover:bg-primary-foreground/10"
+          >
+            <Link href="/admin/students">إدارة الطلاب</Link>
           </Button>
         </div>
       </div>
@@ -151,30 +150,39 @@ export default function AdminDashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {recentActivities.map((activity, index) => (
-              <div
-                key={index}
-                className="flex items-start gap-3 p-3 rounded-xl bg-muted/50 hover:bg-muted transition-colors"
-              >
-                <div className={`p-2 rounded-lg ${
-                  activity.type === "view" ? "bg-primary/10" :
-                  activity.type === "download" ? "bg-secondary/10" :
-                  "bg-chart-2/10"
-                }`}>
-                  {activity.type === "view" ? (
+            {recentWatch.length === 0 ?
+              <p className="text-sm text-muted-foreground">لا يوجد نشاط مشاهدة حديث.</p>
+            : recentWatch.map((log, index) => (
+                <div
+                  key={`${log.lessonTitle}-${log.studentName}-${log.lastWatchedAt.toISOString()}-${index}`}
+                  className="flex items-start gap-3 p-3 rounded-xl bg-muted/50 hover:bg-muted transition-colors"
+                >
+                  <div className="p-2 rounded-lg bg-primary/10">
                     <Eye className="h-4 w-4 text-primary" />
-                  ) : activity.type === "download" ? (
-                    <Download className="h-4 w-4 text-secondary" />
-                  ) : (
-                    <ArrowUpLeft className="h-4 w-4 text-chart-2" />
-                  )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-foreground">
+                      <span className="font-medium">{log.studentName}</span>
+                      {" — "}
+                      <span className="text-muted-foreground">{log.lessonTitle}</span>
+                    </p>
+                    <p className="text-sm text-foreground mt-0.5">
+                      {log.completed ?
+                        "أكمل الدرس"
+                      : log.lastPositionSeconds > 0 ?
+                        `شاهد نحو ${Math.max(1, Math.round(log.lastPositionSeconds / 60))} دقيقة (${log.progressPercent}%)`
+                      : `تقدّم ${log.progressPercent}%`}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {formatDistanceToNow(log.lastWatchedAt, {
+                        addSuffix: true,
+                        locale: arSA,
+                      })}
+                    </p>
+                  </div>
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-foreground">{activity.text}</p>
-                  <p className="text-xs text-muted-foreground mt-1">{activity.time}</p>
-                </div>
-              </div>
-            ))}
+              ))
+            }
           </CardContent>
         </Card>
 
@@ -187,23 +195,22 @@ export default function AdminDashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {pendingTasks.map((task, index) => (
-              <div
-                key={index}
-                className="flex items-center gap-3 p-3 rounded-xl bg-muted/50 hover:bg-muted transition-colors"
-              >
+            {unreadConversationsCount > 0 ?
+              <div className="flex items-center gap-3 p-3 rounded-xl bg-muted/50">
                 <input
                   type="checkbox"
+                  readOnly
                   className="h-5 w-5 rounded-md border-2 border-muted-foreground/30 text-primary focus:ring-primary"
+                  aria-hidden
                 />
-                <span className="flex-1 text-sm text-foreground">{task.text}</span>
-                {task.urgent && (
-                  <span className="text-xs bg-destructive/10 text-destructive px-2 py-1 rounded-full">
-                    عاجل
-                  </span>
-                )}
+                <span className="flex-1 text-sm text-foreground">
+                  مراجعة {unreadConversationsCount} محادثة فيها رسائل جديدة من الطلاب
+                </span>
+                <span className="text-xs bg-destructive/10 text-destructive px-2 py-1 rounded-full">
+                  عاجل
+                </span>
               </div>
-            ))}
+            : <p className="text-sm text-muted-foreground">لا مهام عاجلة.</p>}
           </CardContent>
         </Card>
       </div>
@@ -226,54 +233,47 @@ export default function AdminDashboard() {
                 <tr className="text-right border-b border-border">
                   <th className="pb-3 text-sm font-medium text-muted-foreground">الاسم</th>
                   <th className="pb-3 text-sm font-medium text-muted-foreground">البريد</th>
-                  <th className="pb-3 text-sm font-medium text-muted-foreground">الاشتراك</th>
+                  <th className="pb-3 text-sm font-medium text-muted-foreground">الخطة</th>
                   <th className="pb-3 text-sm font-medium text-muted-foreground">الحالة</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {demoStudents.slice(0, 5).map((student) => (
-                  <tr key={student.id} className="hover:bg-muted/50">
-                    <td className="py-3">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
-                          <span className="text-sm font-medium text-primary">
-                            {student.name.charAt(0)}
-                          </span>
-                        </div>
-                        <span className="text-sm font-medium text-foreground">{student.name}</span>
-                      </div>
-                    </td>
-                    <td className="py-3 text-sm text-muted-foreground">{student.email}</td>
-                    <td className="py-3">
-                      <span className={`text-xs px-2 py-1 rounded-full ${
-                        student.subscriptionType === "premium"
-                          ? "bg-chart-4/10 text-chart-4"
-                          : student.subscriptionType === "monthly"
-                          ? "bg-primary/10 text-primary"
-                          : student.subscriptionType === "term"
-                          ? "bg-accent/15 text-accent-foreground"
-                          : "bg-muted text-muted-foreground"
-                      }`}>
-                        {student.subscriptionType === "premium"
-                          ? "مميز"
-                          : student.subscriptionType === "monthly"
-                          ? "شهري"
-                          : student.subscriptionType === "term"
-                          ? "فصلي"
-                          : "بانتظار التفعيل"}
-                      </span>
-                    </td>
-                    <td className="py-3">
-                      <span className={`text-xs px-2 py-1 rounded-full ${
-                        student.isActive
-                          ? "bg-chart-2/10 text-chart-2"
-                          : "bg-muted text-muted-foreground"
-                      }`}>
-                        {student.isActive ? "نشط" : "غير نشط"}
-                      </span>
+                {recentStudents.length === 0 ?
+                  <tr>
+                    <td colSpan={4} className="py-6 text-center text-sm text-muted-foreground">
+                      لا يوجد طلاب مسجّلون بعد.
                     </td>
                   </tr>
-                ))}
+                : recentStudents.map((student) => (
+                    <tr key={student.id} className="hover:bg-muted/50">
+                      <td className="py-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+                            <span className="text-sm font-medium text-primary">
+                              {student.full_name.charAt(0)}
+                            </span>
+                          </div>
+                          <span className="text-sm font-medium text-foreground">{student.full_name}</span>
+                        </div>
+                      </td>
+                      <td className="py-3 text-sm text-muted-foreground">{student.email}</td>
+                      <td className="py-3">
+                        <span className="text-xs px-2 py-1 rounded-full bg-primary/10 text-primary">
+                          {student.planLabel}
+                        </span>
+                      </td>
+                      <td className="py-3">
+                        <span
+                          className={`text-xs px-2 py-1 rounded-full ${
+                            student.isActive ? "bg-chart-2/10 text-chart-2" : "bg-muted text-muted-foreground"
+                          }`}
+                        >
+                          {student.isActive ? "اشتراك فعّال" : "غير فعّال"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                }
               </tbody>
             </table>
           </div>
